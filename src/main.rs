@@ -1,18 +1,25 @@
+#![windows_subsystem = "windows"]
+
 mod keyboard;
 mod view;
 
 use keyboard::{KeyBinds, KeyPress};
 
 use iced::{
-    button, executor, text_input, window, Align, Application, Button, Clipboard, Column, Command,
-    Container, Element, Length, Settings, Subscription, Text, TextInput,
+    button, executor, scrollable, text_input, window, Align, Application, Button, Clipboard,
+    Column, Command, Container, Element, Length, Scrollable, Settings, Subscription, Text,
+    TextInput,
 };
 
 use snew::{
-    auth::{Authenticator, Credentials, ScriptAuthenticator},
+    auth::{Credentials, ScriptAuthenticator},
     reddit::{self, Reddit},
     things::Post,
 };
+
+use view::View;
+
+use std::sync::Arc;
 
 fn main() -> iced::Result {
     let settings = Settings {
@@ -24,36 +31,41 @@ fn main() -> iced::Result {
         ..Default::default()
     };
 
-    RedditUI::<ScriptAuthenticator>::run(settings)
+    RedditUI::run(settings)
 }
 
 #[derive(Debug)]
-struct RedditUI<'a, T: Authenticator> {
+struct RedditUI {
     /// The reddit client to make requests with
-    reddit_client: Option<Reddit<T>>,
-    /// Posts that are fetched and can be displayed
-    posts: Vec<Post<'a, T>>,
+    reddit_client: Option<Arc<Reddit>>,
     /// Keybinds that can perform som [`Action`]
     keybinds: KeyBinds,
     /// Current state of the application
-    state: UIState<'a, T>,
+    state: UIState,
 }
 
 #[derive(Debug)]
-enum UIState<'a, T: Authenticator> {
+enum UIState {
     Unathenticated {
         client_id_input_box: InputBox,
         client_secret_input_box: InputBox,
         username_input_box: InputBox,
         password_input_box: InputBox,
         submit_button: button::State,
-        errored: Option<String>,
+        error_message: Option<Error>,
     },
     LoggingIn,
     ViewingPostFeed {
+        /// Posts that are fetched and can be displayed
+        posts: Vec<Post>,
+        /// Currently highlighted post, that is it is marked in the UI and pressing the keybind to open a post will open this post.
+        /// References an index in [`Self::ViewingPostFeed::posts`]
         highlighted: usize,
+        /// State of the scrollbar
+        scrollbar: scrollable::State,
+        /// Currently opened post
+        opened: Option<Post>,
     },
-    ViewingPost(&'a Post<'a, T>),
 }
 
 /// Messages that may be sent when the user performs certain actions.
@@ -66,7 +78,7 @@ pub enum Message {
     /// A key was pressed
     KeyPressed(KeyPress),
     /// The user logged in succesfully
-    LoggedIn(Result<Reddit<ScriptAuthenticator>, Error>),
+    LoggedIn(Result<Arc<Reddit>, Error>),
 }
 
 #[derive(Debug, Default)]
@@ -94,7 +106,7 @@ pub enum Action {
     OpenPost,
 }
 
-impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
+impl<'a> Application for RedditUI {
     type Executor = executor::Default;
     type Message = Message;
     type Flags = ();
@@ -104,14 +116,13 @@ impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
             Self {
                 reddit_client: None,
                 keybinds: KeyBinds::default(),
-                posts: Vec::new(),
                 state: UIState::Unathenticated {
                     client_id_input_box: InputBox::default(),
                     client_secret_input_box: InputBox::default(),
                     username_input_box: InputBox::default(),
                     password_input_box: InputBox::default(),
                     submit_button: button::State::default(),
-                    errored: None,
+                    error_message: None,
                 },
             },
             Command::none(),
@@ -126,7 +137,19 @@ impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
         match message {
             Message::KeyPressed(press) => {
                 if let Some(action) = self.keybinds.action(press) {
-                    println!("Should've taken action: {:?}", action);
+                    match &mut self.state {
+                        UIState::ViewingPostFeed {
+                            highlighted,
+                            scrollbar: _,
+                            posts: _,
+                            opened: _,
+                        } => match action {
+                            Action::PostUp => *highlighted -= 1,
+                            Action::PostDown => *highlighted += 1,
+                            Action::OpenPost => (),
+                        },
+                        _ => (),
+                    }
                 }
             }
             Message::InputSubmitted => match &mut self.state {
@@ -136,7 +159,7 @@ impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
                     username_input_box: u_box,
                     password_input_box: p_box,
                     submit_button: _,
-                    errored: _,
+                    error_message: _,
                 } => {
                     let command = Command::perform(
                         login(Credentials::new(
@@ -159,7 +182,7 @@ impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
                     username_input_box: u_box,
                     password_input_box: p_box,
                     submit_button: _,
-                    errored: _,
+                    error_message: _,
                 } => match input {
                     Input::Username(value) => u_box.value = value,
                     Input::Password(value) => p_box.value = value,
@@ -168,12 +191,33 @@ impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
                 },
                 _ => (),
             },
-            Message::LoggedIn(result) => {
-                let client = result.unwrap();
-                println!("{:?}", client.me());
-                self.reddit_client = Some(client);
-                self.state = UIState::ViewingPostFeed { highlighted: 0 }
-            }
+            Message::LoggedIn(result) => match result {
+                Ok(reddit) => {
+                    let mut rust = reddit.subreddit("rust").hot();
+
+                    rust.limit = 50;
+                    let posts = rust.take(50).filter_map(|p| p.ok()).collect();
+
+                    self.reddit_client = Some(reddit);
+
+                    self.state = UIState::ViewingPostFeed {
+                        posts,
+                        highlighted: 0,
+                        opened: None,
+                        scrollbar: scrollable::State::new(),
+                    };
+                }
+                Err(err) => {
+                    self.state = UIState::Unathenticated {
+                        client_id_input_box: InputBox::default(),
+                        client_secret_input_box: InputBox::default(),
+                        username_input_box: InputBox::default(),
+                        password_input_box: InputBox::default(),
+                        submit_button: button::State::default(),
+                        error_message: Some(err),
+                    }
+                }
+            },
         }
         Command::none()
     }
@@ -196,7 +240,7 @@ impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
                 username_input_box,
                 password_input_box,
                 submit_button,
-                errored,
+                error_message,
             } => {
                 let mut column = Column::new()
                     .padding(20)
@@ -257,29 +301,54 @@ impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
                         Button::new(submit_button, Text::new("Submit"))
                             .on_press(Message::InputSubmitted),
                     );
-                if let Some(error_str) = &errored {
+                if let Some(error) = &error_message {
+                    let error_str = match error {
+                        Error::AuthenticationError(s) => {
+                            format!("Failed to authenticate, try again. Reason:\n{}", s)
+                        }
+                        Error::RequestError(s) => {
+                            format!("An error occured sending the HTTPS request. Reason:\n{}", s)
+                        }
+                        Error::Other(s) => format!("An error occured:\n{}", s),
+                    };
                     column = column.push(Text::new(error_str));
                 }
                 column
             }
             UIState::LoggingIn => Column::new().push(Text::new("Logging in...")),
-            UIState::ViewingPostFeed { highlighted } => Column::new().push(Text::new(format!(
-                "Viewing posts, highlighted: {}",
-                highlighted
-            ))),
-            _ => Column::new().push(Text::new("Empty")),
+            UIState::ViewingPostFeed {
+                posts,
+                highlighted: _,
+                opened: _,
+                scrollbar,
+            } => {
+                let mut main_view = Scrollable::new(scrollbar)
+                    .spacing(10)
+                    // .width(Length::Fill)
+                    .align_items(Align::Start);
+
+                for post in posts.iter() {
+                    main_view = main_view.push(post.view());
+                }
+
+                Column::new().push(main_view).width(Length::Fill)
+            }
         };
 
-        Container::new(content).center_x().center_y().into()
+        Container::new(content)
+            .width(Length::Fill)
+            .center_x()
+            .center_y()
+            .into()
     }
 }
 
-async fn login(creds: Credentials) -> Result<Reddit<ScriptAuthenticator>, Error> {
+async fn login(creds: Credentials) -> Result<Arc<Reddit>, Error> {
     let user_agent = format!("windows:snui:v0.1.0 (by /u/{})", &creds.username);
 
     let script_auth = ScriptAuthenticator::new(creds);
 
-    Ok(Reddit::new(script_auth, &user_agent)?)
+    Ok(Arc::new(Reddit::new(script_auth, &user_agent)?))
 }
 
 #[derive(Debug, Clone)]

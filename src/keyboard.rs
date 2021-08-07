@@ -49,8 +49,8 @@ impl KeyPress {
 impl Default for KeyBinds {
     fn default() -> Self {
         let mut binds = HashMap::new();
-        binds.insert(KeyBind::basic(KeyCode::J), Action::PostUp);
-        binds.insert(KeyBind::basic(KeyCode::K), Action::PostDown);
+        binds.insert(KeyBind::basic(KeyCode::J), Action::PostDown);
+        binds.insert(KeyBind::basic(KeyCode::K), Action::PostUp);
         binds.insert(KeyBind::basic(KeyCode::Enter), Action::OpenPost);
 
         Self { binds }

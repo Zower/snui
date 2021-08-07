@@ -1,14 +1,34 @@
 use crate::Message;
-use iced::{Element, Row, Text};
-use snew::{auth::Authenticator, things::Post};
+use iced::{Align, Column, Element, HorizontalAlignment, Row, Text, VerticalAlignment};
+use snew::things::Post;
 
 /// Something that can be rendered in the UI.
-trait View {
+pub trait View {
     fn view(&self) -> Element<Message>;
 }
 
-impl<'a, T: Authenticator> View for Post<'a, T> {
+impl View for Post {
     fn view(&self) -> Element<Message> {
-        Row::new().push(Text::new("Post!")).into()
+        Row::new()
+            .push(
+                Column::new()
+                    .push(
+                        Text::new(self.ups.to_string())
+                            .horizontal_alignment(HorizontalAlignment::Center)
+                            .vertical_alignment(VerticalAlignment::Center)
+                            .size(12),
+                    )
+                    .push(
+                        Text::new(self.downs.to_string())
+                            .horizontal_alignment(HorizontalAlignment::Center)
+                            .vertical_alignment(VerticalAlignment::Center)
+                            .size(12),
+                    ),
+            )
+            .push(Text::new(&self.title).size(20))
+            .push(Text::new(&self.author).size(15))
+            .spacing(15)
+            .align_items(Align::Center)
+            .into()
     }
 }
