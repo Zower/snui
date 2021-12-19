@@ -1,59 +1,124 @@
-mod keyboard;
-mod view;
+mod impl_render;
+mod input;
 
-use keyboard::{KeyBinds, KeyPress};
-
-use iced::{
-    button, executor, text_input, window, Align, Application, Button, Clipboard, Column, Command,
-    Container, Element, Length, Settings, Subscription, Text, TextInput,
-};
+use input::{KeyBinds, KeyPress};
 
 use snew::{
-    auth::{Authenticator, Credentials, ScriptAuthenticator},
+    auth::{
+        authenticator::{AnonymousAuthenticator, Authenticator, ScriptAuthenticator},
+        Credentials,
+    },
     reddit::{self, Reddit},
     things::Post,
 };
 
-fn main() -> iced::Result {
-    let settings = Settings {
-        window: window::Settings {
-            size: (800, 500),
-            ..Default::default()
-        },
-        antialiasing: true,
-        ..Default::default()
-    };
-
-    RedditUI::<ScriptAuthenticator>::run(settings)
-}
+use eframe::{
+    egui::{self, menu, widgets, Align, CentralPanel, Layout, SidePanel, Slider, TopBottomPanel},
+    epi,
+};
 
 #[derive(Debug)]
-struct RedditUI<'a, T: Authenticator> {
+struct SnuiApp {
     /// The reddit client to make requests with
-    reddit_client: Option<Reddit<T>>,
+    client: Reddit,
     /// Posts that are fetched and can be displayed
-    posts: Vec<Post<'a, T>>,
+    posts: Vec<Post>,
+    /// Currently highlighted post in left pane
+    highlighted: usize,
+    /// Content currently in the center pane
+    content: Box<dyn Render>,
     /// Keybinds that can perform som [`Action`]
     keybinds: KeyBinds,
-    /// Current state of the application
-    state: UIState<'a, T>,
+    /// Current layout of the application
+    layout: SnuiLayout,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Reddit::new(
+        AnonymousAuthenticator::new(),
+        "windows:snui:v0.1.0 (by /u/zower98",
+    )?;
+
+    let posts: Vec<Post> = client
+        .subreddit("rust")
+        .hot()
+        .filter_map(|p| p.ok())
+        .take(50)
+        .collect();
+
+    let app = SnuiApp {
+        client,
+        highlighted: 0,
+        content: Box::new(posts[0].clone()),
+        posts,
+        keybinds: KeyBinds::default(),
+        layout: SnuiLayout::HorizontalSplit,
+    };
+    let native_options = eframe::NativeOptions {
+        initial_window_size: Some(egui::vec2(1200f32, 800f32)),
+        ..Default::default()
+    };
+    eframe::run_native(Box::new(app), native_options);
+}
+
+
+impl epi::App for SnuiApp {
+    fn name(&self) -> &str {
+        "SnUI"
+    }
+
+    /// Called each time the UI needs repainting, which may be many times per second.
+    /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
+    fn update(&mut self, ctx: &egui::CtxRef, frame: &mut epi::Frame<'_>) {
+        for event in &ctx.input().events {
+            let action  = match event {
+                egui::Event::Key {key, pressed, modifiers: _} if (!pressed) => self.keybinds.action(KeyPress::basic(*key)),
+                _ => None
+            };
+
+            if let Some(action) = action {
+                match action {
+                    Action::PostUp => self.highlighted = self.highlighted.checked_add(1).unwrap_or(usize::MAX),
+                    Action::PostDown => self.highlighted = self.highlighted.checked_sub(1).unwrap_or(0),
+                    Action::OpenPost => self.content = Box::new(self.posts[self.highlighted].clone()),
+                }
+            };
+
+        }
+
+        TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            menu::bar(ui, |ui| {
+                menu::menu(ui, "App", |ui| {
+                    if ui.button("Quit").clicked() {
+                        frame.quit();
+                    }
+                });
+            });
+        });
+
+        SidePanel::left("side_panel").default_width(500f32).max_width(800f32).show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for post in &self.posts {
+                    post.render_summary(ui);
+                }
+            });
+        });
+
+        CentralPanel::default().show(ctx, |ui| {
+            self.content.render(ui);
+        });
+    }
+}
+
+pub(crate) trait Render: std::fmt::Debug {
+    fn render_summary(&self, ui: &mut egui::Ui) {}
+    fn render(&self, ui: &mut egui::Ui);
 }
 
 #[derive(Debug)]
-enum UIState<'a, T: Authenticator> {
-    Unathenticated {
-        client_id_input_box: InputBox,
-        client_secret_input_box: InputBox,
-        username_input_box: InputBox,
-        password_input_box: InputBox,
-        submit_button: button::State,
-        errored: Option<String>,
-    },
-    LoggingIn,
-    ViewingPostFeed {
-        highlighted: usize,
-    },
-    ViewingPost(&'a Post<'a, T>),
+pub(crate)enum SnuiLayout {
+    /// Two or three panes showing posts | current post or comments | optional third pane for comments exclusively
+    HorizontalSplit
 }
 
 /// Messages that may be sent when the user performs certain actions.
@@ -65,14 +130,6 @@ pub enum Message {
     InputChanged(Input),
     /// A key was pressed
     KeyPressed(KeyPress),
-    /// The user logged in succesfully
-    LoggedIn(Result<Reddit<ScriptAuthenticator>, Error>),
-}
-
-#[derive(Debug, Default)]
-struct InputBox {
-    state: text_input::State,
-    value: String,
 }
 
 #[derive(Debug, Clone)]
@@ -94,193 +151,13 @@ pub enum Action {
     OpenPost,
 }
 
-impl<'a> Application for RedditUI<'a, ScriptAuthenticator> {
-    type Executor = executor::Default;
-    type Message = Message;
-    type Flags = ();
+// fn login(creds: Credentials) -> Result<Reddit, Error> {
+//     let user_agent = format!(")", &creds.username);
 
-    fn new(_: ()) -> (Self, Command<Message>) {
-        (
-            Self {
-                reddit_client: None,
-                keybinds: KeyBinds::default(),
-                posts: Vec::new(),
-                state: UIState::Unathenticated {
-                    client_id_input_box: InputBox::default(),
-                    client_secret_input_box: InputBox::default(),
-                    username_input_box: InputBox::default(),
-                    password_input_box: InputBox::default(),
-                    submit_button: button::State::default(),
-                    errored: None,
-                },
-            },
-            Command::none(),
-        )
-    }
+//     let script_auth = ScriptAuthenticator::new(creds);
 
-    fn title(&self) -> String {
-        String::from("Snui")
-    }
-
-    fn update(&mut self, message: Message, _: &mut Clipboard) -> Command<Message> {
-        match message {
-            Message::KeyPressed(press) => {
-                if let Some(action) = self.keybinds.action(press) {
-                    println!("Should've taken action: {:?}", action);
-                }
-            }
-            Message::InputSubmitted => match &mut self.state {
-                UIState::Unathenticated {
-                    client_id_input_box: ci_box,
-                    client_secret_input_box: cs_box,
-                    username_input_box: u_box,
-                    password_input_box: p_box,
-                    submit_button: _,
-                    errored: _,
-                } => {
-                    let command = Command::perform(
-                        login(Credentials::new(
-                            &ci_box.value,
-                            &cs_box.value,
-                            &u_box.value,
-                            &p_box.value,
-                        )),
-                        Message::LoggedIn,
-                    );
-                    self.state = UIState::LoggingIn;
-                    return command;
-                }
-                _ => (),
-            },
-            Message::InputChanged(input) => match &mut self.state {
-                UIState::Unathenticated {
-                    client_id_input_box: ci_box,
-                    client_secret_input_box: cs_box,
-                    username_input_box: u_box,
-                    password_input_box: p_box,
-                    submit_button: _,
-                    errored: _,
-                } => match input {
-                    Input::Username(value) => u_box.value = value,
-                    Input::Password(value) => p_box.value = value,
-                    Input::ClientID(value) => ci_box.value = value,
-                    Input::ClientSecret(value) => cs_box.value = value,
-                },
-                _ => (),
-            },
-            Message::LoggedIn(result) => {
-                let client = result.unwrap();
-                println!("{:?}", client.me());
-                self.reddit_client = Some(client);
-                self.state = UIState::ViewingPostFeed { highlighted: 0 }
-            }
-        }
-        Command::none()
-    }
-
-    fn subscription(&self) -> Subscription<Message> {
-        iced_native::subscription::events_with(|event, _| match event {
-            iced_native::event::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                key_code,
-                modifiers,
-            }) => Some(Message::KeyPressed(KeyPress::from((key_code, modifiers)))),
-            _ => None,
-        })
-    }
-
-    fn view(&mut self) -> Element<Self::Message> {
-        let content = match &mut self.state {
-            UIState::Unathenticated {
-                client_id_input_box,
-                client_secret_input_box,
-                username_input_box,
-                password_input_box,
-                submit_button,
-                errored,
-            } => {
-                let mut column = Column::new()
-                    .padding(20)
-                    .spacing(10)
-                    .align_items(Align::Center)
-                    .push(
-                        TextInput::new(
-                            &mut username_input_box.state,
-                            "Username",
-                            &username_input_box.value,
-                            |input| Message::InputChanged(Input::Username(input)),
-                        )
-                        .width(Length::Units(200))
-                        .padding(10)
-                        .size(20)
-                        .on_submit(Message::InputSubmitted),
-                    )
-                    .push(
-                        TextInput::new(
-                            &mut password_input_box.state,
-                            "Password",
-                            &password_input_box.value,
-                            |input| Message::InputChanged(Input::Password(input)),
-                        )
-                        .width(Length::Units(200))
-                        .padding(10)
-                        .size(20)
-                        .password()
-                        .on_submit(Message::InputSubmitted),
-                    )
-                    .push(
-                        TextInput::new(
-                            &mut client_id_input_box.state,
-                            "Client ID",
-                            &client_id_input_box.value,
-                            |input| Message::InputChanged(Input::ClientID(input)),
-                        )
-                        .width(Length::Units(200))
-                        .padding(10)
-                        .size(20)
-                        .password()
-                        .on_submit(Message::InputSubmitted),
-                    )
-                    .push(
-                        TextInput::new(
-                            &mut client_secret_input_box.state,
-                            "Client Secret",
-                            &client_secret_input_box.value,
-                            |input| Message::InputChanged(Input::ClientSecret(input)),
-                        )
-                        .width(Length::Units(200))
-                        .padding(10)
-                        .size(20)
-                        .password()
-                        .on_submit(Message::InputSubmitted),
-                    )
-                    .push(
-                        Button::new(submit_button, Text::new("Submit"))
-                            .on_press(Message::InputSubmitted),
-                    );
-                if let Some(error_str) = &errored {
-                    column = column.push(Text::new(error_str));
-                }
-                column
-            }
-            UIState::LoggingIn => Column::new().push(Text::new("Logging in...")),
-            UIState::ViewingPostFeed { highlighted } => Column::new().push(Text::new(format!(
-                "Viewing posts, highlighted: {}",
-                highlighted
-            ))),
-            _ => Column::new().push(Text::new("Empty")),
-        };
-
-        Container::new(content).center_x().center_y().into()
-    }
-}
-
-async fn login(creds: Credentials) -> Result<Reddit<ScriptAuthenticator>, Error> {
-    let user_agent = format!("windows:snui:v0.1.0 (by /u/{})", &creds.username);
-
-    let script_auth = ScriptAuthenticator::new(creds);
-
-    Ok(Reddit::new(script_auth, &user_agent)?)
-}
+//     Ok(Reddit::new(script_auth, &user_agent)?)
+// }
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -292,7 +169,7 @@ pub enum Error {
 impl From<reddit::Error> for Error {
     fn from(error: reddit::Error) -> Self {
         match error {
-            reddit::Error::AuthenticationError(err) => Self::AuthenticationError(err.to_string()),
+            reddit::Error::AuthenticationError(err) => Self::AuthenticationError(err),
             reddit::Error::RequestError(err) => Self::RequestError(err.to_string()),
             // Implement rest of errors
             _ => panic!("Other error received"),
