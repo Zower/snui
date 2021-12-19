@@ -61,7 +61,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(Box::new(app), native_options);
 }
 
-
 impl epi::App for SnuiApp {
     fn name(&self) -> &str {
         "SnUI"
@@ -71,19 +70,28 @@ impl epi::App for SnuiApp {
     /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
     fn update(&mut self, ctx: &egui::CtxRef, frame: &mut epi::Frame<'_>) {
         for event in &ctx.input().events {
-            let action  = match event {
-                egui::Event::Key {key, pressed, modifiers: _} if (!pressed) => self.keybinds.action(KeyPress::basic(*key)),
-                _ => None
+            let action = match event {
+                egui::Event::Key {
+                    key,
+                    pressed,
+                    modifiers: _,
+                } if (!pressed) => self.keybinds.action(KeyPress::basic(*key)),
+                _ => None,
             };
 
             if let Some(action) = action {
                 match action {
-                    Action::PostUp => self.highlighted = self.highlighted.checked_add(1).unwrap_or(usize::MAX),
-                    Action::PostDown => self.highlighted = self.highlighted.checked_sub(1).unwrap_or(0),
-                    Action::OpenPost => self.content = Box::new(self.posts[self.highlighted].clone()),
+                    Action::PostUp => {
+                        self.highlighted = self.highlighted.checked_add(1).unwrap_or(usize::MAX)
+                    }
+                    Action::PostDown => {
+                        self.highlighted = self.highlighted.checked_sub(1).unwrap_or(0)
+                    }
+                    Action::OpenPost => {
+                        self.content = Box::new(self.posts[self.highlighted].clone())
+                    }
                 }
             };
-
         }
 
         TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -96,13 +104,16 @@ impl epi::App for SnuiApp {
             });
         });
 
-        SidePanel::left("side_panel").default_width(500f32).max_width(800f32).show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for post in &self.posts {
-                    post.render_summary(ui);
-                }
+        SidePanel::left("side_panel")
+            .default_width(500f32)
+            .max_width(800f32)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for post in &self.posts {
+                        post.render_summary(ui);
+                    }
+                });
             });
-        });
 
         CentralPanel::default().show(ctx, |ui| {
             self.content.render(ui);
@@ -116,9 +127,9 @@ pub(crate) trait Render: std::fmt::Debug {
 }
 
 #[derive(Debug)]
-pub(crate)enum SnuiLayout {
+pub(crate) enum SnuiLayout {
     /// Two or three panes showing posts | current post or comments | optional third pane for comments exclusively
-    HorizontalSplit
+    HorizontalSplit,
 }
 
 /// Messages that may be sent when the user performs certain actions.
