@@ -1,6 +1,7 @@
 refresh_token = "aaaa"
 immediate_posts = true
 [binds]
-a = "PostUp"
-b = { action = "PostDown", modifiers = ["shift"] }
-c = { action = "OpenPost", modifiers = ["shift", "ctrl"] }
+k = "PostUp"
+j = "PostDown" 
+enter = "OpenPost" 
+p = { action = "ToggleCollapse", modifiers = ["shift"] }

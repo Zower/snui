@@ -21,7 +21,7 @@ use snew::{
 };
 
 use eframe::{
-    egui::{self, menu, CentralPanel, SidePanel, TopBottomPanel},
+    egui::{self, menu, CentralPanel, SidePanel, TopBottomPanel, Window},
     epi,
 };
 
@@ -45,6 +45,8 @@ struct SnuiApp {
     receiver: Receiver<Message>,
     /// Sender for giving out,
     sender: Sender<Message>,
+    /// test
+    collapsed: bool,
     /// Current layout of the application
     layout: SnuiLayout,
 }
@@ -78,6 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         receiver: r,
         sender: s,
         config,
+        collapsed: true,
         layout: SnuiLayout::HorizontalSplit,
     };
 
@@ -141,26 +144,39 @@ impl epi::App for SnuiApp {
         });
 
         if self.posts.len() > 0 {
-            SidePanel::left("side_panel")
-                .default_width(350f32)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.vertical_centered_justified(|ui| {
-                            for (i, post) in self.posts.iter().enumerate() {
-                                ui_post_summary(ui, &*post.inner, self.highlighted == i);
-                                if i != self.posts.len() {
-                                    ui.separator();
-                                }
-                            }
-                        })
+            if self.collapsed {
+                SidePanel::left("side_panel")
+                    .default_width(350f32)
+                    .show(ctx, |ui| {
+                        posts(ui, &self.posts, &self.highlighted);
                     });
-                });
+            } else {
+                Window::new("post_window")
+                    .default_width(350f32)
+                    .default_height(800f32)
+                    .show(&ctx, |ui| {
+                        posts(ui, &self.posts, &self.highlighted);
+                    });
+            }
         }
 
         CentralPanel::default().show(ctx, |ui| {
             self.main_ui(ui);
         });
     }
+}
+
+fn posts(ui: &mut egui::Ui, posts: &Vec<ViewablePost>, highlighted: &usize) {
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.vertical_centered_justified(|ui| {
+            for (i, post) in posts.iter().enumerate() {
+                ui_post_summary(ui, &*post.inner, *highlighted == i);
+                if i != posts.len() {
+                    ui.separator();
+                }
+            }
+        })
+    });
 }
 
 impl SnuiApp {
@@ -206,6 +222,7 @@ impl SnuiApp {
                     self.viewed = self.highlighted
                 }
             }
+            Action::ToggleCollapse => self.collapsed = !self.collapsed,
         }
     }
 
@@ -290,6 +307,8 @@ pub enum Action {
     PostDown,
     /// Open the currrently marked post
     OpenPost,
+    /// Toggle collapse of postfeed
+    ToggleCollapse,
 }
 
 // fn login(creds: Credentials) -> Result<Reddit, Error> {
