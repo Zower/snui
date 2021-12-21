@@ -11,10 +11,7 @@ pub struct Image {
 
 impl Image {
     pub fn new(id: egui::TextureId, size: (usize, usize)) -> Self {
-       Self {
-           id,
-           size
-       } 
+        Self { id, size }
     }
 }
 
@@ -24,7 +21,12 @@ pub struct ImageManager {
 }
 
 impl ImageManager {
-    pub fn store(&mut self, post_id: usize, image: &[u8], allocator: &mut dyn eframe::epi::TextureAllocator) -> Option<Image> {
+    pub fn store(
+        &mut self,
+        post_id: usize,
+        image: &[u8],
+        allocator: &mut dyn eframe::epi::TextureAllocator,
+    ) -> Option<Image> {
         let image = image::load_from_memory(image);
 
         if let Ok(image) = image {
@@ -48,9 +50,8 @@ impl ImageManager {
         }
 
         None
-
     }
-    
+
     pub fn get(&self, post_id: &usize) -> Option<&Image> {
         self.images.get(post_id)
     }

@@ -5,7 +5,7 @@ use snew::things::{Post, PostFeed};
 use crossbeam_channel::Sender;
 
 pub enum Message {
-    PostsReady(Vec<Arc<Post>>, PostFeed)
+    PostsReady(Vec<Arc<Post>>, PostFeed),
 }
 
 pub fn spawn_more(mut feed: PostFeed, s: Sender<Message>) {

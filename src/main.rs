@@ -1,13 +1,13 @@
+mod fetch;
 mod image_manager;
 mod impl_render;
 mod input;
-mod fetch;
 
 use std::{sync::Arc, vec};
 
-use crossbeam_channel::{Receiver, unbounded, Sender};
-use fetch::{Message, spawn_more};
-use image_manager::{ImageManager};
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use fetch::{spawn_more, Message};
+use image_manager::ImageManager;
 use impl_render::ui_post_summary;
 use input::{KeyBinds, KeyPress};
 
@@ -134,11 +134,15 @@ impl epi::App for SnuiApp {
                                             self.content = Some(Arc::new(text))
                                         }
                                         snew::content::Content::Image(image) => {
-                                            let handle = self.image_manager.store(self.highlighted, &image, frame.tex_allocator());
+                                            let handle = self.image_manager.store(
+                                                self.highlighted,
+                                                &image,
+                                                frame.tex_allocator(),
+                                            );
                                             if let Some(handle) = handle {
                                                 self.content = Some(Arc::new(handle))
                                             }
-                                        },
+                                        }
                                     }
                                 } else {
                                     println!("{:?}", post.get_content());
