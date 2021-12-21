@@ -8,7 +8,7 @@ use std::{fs, sync::Arc, vec};
 
 use config::{Config, FileConfig};
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use fetch::{get_more_posts, Message, decode_image, get_content};
+use fetch::{decode_image, get_content, get_more_posts, Message};
 use image_manager::ImageManager;
 use impl_render::ui_post_summary;
 use input::KeyPress;
@@ -36,9 +36,9 @@ struct SnuiApp {
     /// Posts that are fetched and can be displayed
     posts: Vec<ViewablePost>,
     /// Currently highlighted post in left pane
-    highlighted: PostId, 
+    highlighted: PostId,
     /// Currently viewed post in left pane
-    viewed: PostId, 
+    viewed: PostId,
     /// Image manager
     image_manager: ImageManager,
     /// Receiver of messages created on other threads
@@ -56,8 +56,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = toml::from_str::<FileConfig>(&config)
         .expect("Error parsing config file. Please check ./config.toml")
         .into();
-
-    println!("{:?}", config);
 
     let client = Reddit::new(
         ApplicationAuthenticator::new("kt3c_AvYiWqN5dO1lzMbjg"),
@@ -116,7 +114,10 @@ impl epi::App for SnuiApp {
                     key,
                     pressed,
                     modifiers: m,
-                } if (!pressed) => self.config.keybinds.action(KeyPress::new((*key).into(), [m.command, m.shift, m.alt])),
+                } if (!pressed) => self
+                    .config
+                    .keybinds
+                    .action(KeyPress::new((*key).into(), [m.command, m.shift, m.alt])),
                 _ => None,
             };
 
@@ -143,17 +144,16 @@ impl epi::App for SnuiApp {
             SidePanel::left("side_panel")
                 .default_width(350f32)
                 .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .show(ui, |ui| {
-                            ui.vertical_centered_justified(|ui| {
-                                for (i, post) in self.posts.iter().enumerate() {
-                                    ui_post_summary(ui, &*post.inner, self.highlighted == i);
-                                    if i != self.posts.len() {
-                                        ui.separator();
-                                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.vertical_centered_justified(|ui| {
+                            for (i, post) in self.posts.iter().enumerate() {
+                                ui_post_summary(ui, &*post.inner, self.highlighted == i);
+                                if i != self.posts.len() {
+                                    ui.separator();
                                 }
-                            })
-                        });
+                            }
+                        })
+                    });
                 });
         }
 
@@ -177,20 +177,6 @@ impl SnuiApp {
             }
         }
     }
-
-    // fn change_main_content(&mut self, ui: &mut egui::Ui) {
-    //     let post = &self.posts[self.highlighted];
-
-    //     if let Some(content) = post.content {
-    //         content.render(ui)
-    //     }
-    // }
-
-    // fn conditional_change_ui(&mut self, ui: &mut egui::Ui) {
-    //     if self.config.immediate_posts {
-    //         self.change_main_content(ui);
-    //     }
-    // }
 
     fn conditional_get_more_posts(&mut self) {
         if self.highlighted == self.posts.len().checked_sub(10).unwrap_or(0) {
@@ -231,7 +217,6 @@ impl SnuiApp {
                     self.posts.append(&mut posts);
                 }
                 Message::ContentReady(content, post_id) => {
-                    println!("Content is ready for {}", post_id);
                     match content {
                         snew::content::Content::Text(text) => {
                             self.posts[post_id].content = Some(Arc::new(text));
@@ -240,8 +225,7 @@ impl SnuiApp {
                             decode_image(image, post_id, self.sender.clone());
                         }
                     }
-
-                },
+                }
                 Message::ImageDecoded(image, size, post_id) => {
                     let handle = self.image_manager.store(
                         self.highlighted,
@@ -252,7 +236,7 @@ impl SnuiApp {
                     if let Some(handle) = handle {
                         self.posts[post_id].content = Some(Arc::new(handle))
                     }
-                },
+                }
             }
         }
     }
@@ -269,16 +253,16 @@ type PostId = usize;
 pub struct ViewablePost {
     pub fetching: bool,
     pub content: Option<Arc<dyn MainContent + Send + Sync>>,
-    pub inner: Arc<Post>
+    pub inner: Arc<Post>,
 }
 
 impl From<Post> for ViewablePost {
     fn from(post: Post) -> Self {
-       Self {
-           fetching: false,
-           inner: Arc::new(post),
-           content: None
-       } 
+        Self {
+            fetching: false,
+            inner: Arc::new(post),
+            content: None,
+        }
     }
 }
 

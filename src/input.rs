@@ -1,4 +1,4 @@
-use crate::{Action, config::Key};
+use crate::{config::Key, Action};
 use std::collections::HashMap;
 
 use eframe::egui;

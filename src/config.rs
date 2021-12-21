@@ -22,17 +22,18 @@ impl From<FileConfig> for Config {
         let mut keybinds = KeyBinds::default();
         for (key, details) in fc.binds.into_iter() {
             match details {
-                ConfigKey::Simple(action) => 
-                    keybinds
-                    .binds
-                    .insert(KeyBind::basic(key.into()), action),
-                ConfigKey::Detailed(config) => { 
+                ConfigKey::Simple(action) => {
+                    keybinds.binds.insert(KeyBind::basic(key.into()), action)
+                }
+                ConfigKey::Detailed(config) => {
                     let m = config.modifiers;
-                    let ctrl = m.iter().any(|m| *m == Mods::Ctrl );
-                    let shift = m.iter().any(|m| *m == Mods::Shift );
-                    let alt = m.iter().any(|m| *m == Mods::Alt );
+                    let ctrl = m.iter().any(|m| *m == Mods::Ctrl);
+                    let shift = m.iter().any(|m| *m == Mods::Shift);
+                    let alt = m.iter().any(|m| *m == Mods::Alt);
 
-                    keybinds.binds.insert(KeyBind::new(key.into(), [ctrl, shift, alt]), config.action)
+                    keybinds
+                        .binds
+                        .insert(KeyBind::new(key.into(), [ctrl, shift, alt]), config.action)
                 }
             };
         }
