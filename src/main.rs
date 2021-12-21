@@ -128,7 +128,8 @@ impl epi::App for SnuiApp {
                 self.handle_action(action, frame);
             };
         }
-        // if self.s.cou
+
+        // for now
         ctx.request_repaint();
 
         self.try_receive(frame);

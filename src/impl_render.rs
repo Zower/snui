@@ -14,10 +14,11 @@ impl MainContent for Image {
 }
 
 pub fn ui_post_summary(ui: &mut egui::Ui, post: &Post, highlight: bool) {
-    ui.vertical(|ui| {
+    let response = ui.vertical(|ui| {
         if highlight {
             ui.visuals_mut().widgets.noninteractive.fg_stroke =
                 egui::Stroke::new(10f32, egui::Color32::WHITE);
+            
         }
 
         let max_chars = (ui.available_width() / 10f32) as usize;
@@ -36,6 +37,10 @@ pub fn ui_post_summary(ui: &mut egui::Ui, post: &Post, highlight: bool) {
         });
         ui.label(post.score.to_string() + " points");
     });
+
+    if highlight {
+        response.response.scroll_to_me(egui::Align::Center)
+    }
 }
 
 impl MainContent for String {
