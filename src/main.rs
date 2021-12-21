@@ -216,16 +216,14 @@ impl SnuiApp {
                     self.feed = Some(feed);
                     self.posts.append(&mut posts);
                 }
-                Message::ContentReady(content, post_id) => {
-                    match content {
-                        snew::content::Content::Text(text) => {
-                            self.posts[post_id].content = Some(Arc::new(text));
-                        }
-                        snew::content::Content::Image(image) => {
-                            decode_image(image, post_id, self.sender.clone());
-                        }
+                Message::ContentReady(content, post_id) => match content {
+                    snew::content::Content::Text(text) => {
+                        self.posts[post_id].content = Some(Arc::new(text));
                     }
-                }
+                    snew::content::Content::Image(image) => {
+                        decode_image(image, post_id, self.sender.clone());
+                    }
+                },
                 Message::ImageDecoded(image, size, post_id) => {
                     let handle = self.image_manager.store(
                         self.highlighted,
