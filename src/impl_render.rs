@@ -2,22 +2,14 @@ use crate::{image_manager::Image, MainContent};
 use eframe::egui::{self, ScrollArea};
 use snew::things::Post;
 
-impl MainContent for Post {
-    fn render(&self, ui: &mut egui::Ui) {
-        ScrollArea::vertical().show(ui, |ui| {
-            if let Some(content) = &self.selftext {
-                ui.label(content);
-            }
-        });
-    }
-}
-
 impl MainContent for Image {
     fn render(&self, ui: &mut egui::Ui) {
-        ui.image(
-            self.id,
-            egui::Vec2::new(self.size.0 as f32, self.size.1 as f32),
-        );
+        ScrollArea::both().show(ui, |ui| {
+            ui.image(
+                self.id,
+                egui::Vec2::new(self.size.0 as f32, self.size.1 as f32),
+            );
+        })
     }
 }
 

@@ -1,16 +1,19 @@
+mod config;
 mod fetch;
 mod image_manager;
 mod impl_render;
 mod input;
 
-use std::{sync::Arc, vec};
+use std::{fs, sync::Arc, vec};
 
+use config::{Config, FileConfig};
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use fetch::{spawn_more, Message};
+use fetch::{get_more_posts, Message, decode_image, get_content};
 use image_manager::ImageManager;
 use impl_render::ui_post_summary;
-use input::{KeyBinds, KeyPress};
+use input::KeyPress;
 
+use serde::Deserialize;
 use snew::{
     auth::authenticator::ApplicationAuthenticator,
     reddit::{self, Reddit},
@@ -26,30 +29,39 @@ use eframe::{
 struct SnuiApp {
     /// The reddit client to make requests with
     client: Reddit,
+    // Configuration
+    config: Config,
     /// Currently loaded feed.
     feed: Option<PostFeed>,
     /// Posts that are fetched and can be displayed
-    posts: Vec<Arc<Post>>,
+    posts: Vec<ViewablePost>,
     /// Currently highlighted post in left pane
-    highlighted: usize,
-    /// Content currently in the center pane
-    content: Option<Arc<dyn MainContent>>,
+    highlighted: PostId, 
+    /// Currently viewed post in left pane
+    viewed: PostId, 
     /// Image manager
     image_manager: ImageManager,
     /// Receiver of messages created on other threads
     receiver: Receiver<Message>,
     /// Sender for giving out,
     sender: Sender<Message>,
-    /// Keybinds that can perform som [`Action`]
-    keybinds: KeyBinds,
     /// Current layout of the application
     layout: SnuiLayout,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = fs::read_to_string("./config.toml")
+        .expect("Error opening config file. Please create ./config.toml");
+
+    let config: Config = toml::from_str::<FileConfig>(&config)
+        .expect("Error parsing config file. Please check ./config.toml")
+        .into();
+
+    println!("{:?}", config);
+
     let client = Reddit::new(
         ApplicationAuthenticator::new("kt3c_AvYiWqN5dO1lzMbjg"),
-        "windows:snui:v0.1.0 (by /u/zower98",
+        "windows:snui:v0.1.0 (by snui on behalf of anonymous user)",
     )?;
 
     let mut feed = client.subreddit("images").hot();
@@ -63,11 +75,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         feed: Some(feed),
         posts: vec![],
         highlighted: 0,
-        content: None,
+        viewed: 0,
         image_manager: ImageManager::default(),
         receiver: r,
         sender: s,
-        keybinds: KeyBinds::default(),
+        config,
         layout: SnuiLayout::HorizontalSplit,
     };
 
@@ -90,12 +102,12 @@ impl epi::App for SnuiApp {
         _frame: &mut epi::Frame<'_>,
         _storage: Option<&dyn eframe::epi::Storage>,
     ) {
-        self.spawn_more()
+        self.get_more_posts()
     }
 
     fn update(&mut self, ctx: &egui::CtxRef, frame: &mut epi::Frame<'_>) {
-        if let None = self.feed {
-            self.try_extend()
+        if self.config.immediate_posts {
+            self.viewed = self.highlighted;
         }
 
         for event in &ctx.input().events {
@@ -103,56 +115,19 @@ impl epi::App for SnuiApp {
                 egui::Event::Key {
                     key,
                     pressed,
-                    modifiers: _,
-                } if (!pressed) => self.keybinds.action(KeyPress::basic(*key)),
+                    modifiers: m,
+                } if (!pressed) => self.config.keybinds.action(KeyPress::new((*key).into(), [m.command, m.shift, m.alt])),
                 _ => None,
             };
 
             if let Some(action) = action {
-                match action {
-                    Action::PostUp => {
-                        self.highlighted = self.highlighted.checked_add(1).unwrap_or(usize::MAX)
-                    }
-                    Action::PostDown => {
-                        self.highlighted = std::cmp::min(
-                            self.posts.len(),
-                            self.highlighted.checked_sub(1).unwrap_or(0),
-                        )
-                    }
-                    Action::OpenPost => {
-                        let post = &self.posts[self.highlighted];
-
-                        if post.is_self {
-                            self.content = Some(post.clone())
-                        } else {
-                            if let Some(image) = self.image_manager.get(&self.highlighted) {
-                                self.content = Some(Arc::new(image.clone()))
-                            } else {
-                                if let Ok(content) = post.get_content() {
-                                    match content {
-                                        snew::content::Content::Text(text) => {
-                                            self.content = Some(Arc::new(text))
-                                        }
-                                        snew::content::Content::Image(image) => {
-                                            let handle = self.image_manager.store(
-                                                self.highlighted,
-                                                &image,
-                                                frame.tex_allocator(),
-                                            );
-                                            if let Some(handle) = handle {
-                                                self.content = Some(Arc::new(handle))
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    println!("{:?}", post.get_content());
-                                }
-                            }
-                        }
-                    }
-                }
+                self.handle_action(action, frame);
             };
         }
+        // if self.s.cou
+        ctx.request_repaint();
+
+        self.try_receive(frame);
 
         TopBottomPanel::top("top_panel").show(ctx, |ui| {
             menu::bar(ui, |ui| {
@@ -164,56 +139,150 @@ impl epi::App for SnuiApp {
             });
         });
 
-        SidePanel::left("side_panel")
-            .default_width(350f32)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .always_show_scroll(true)
-                    .show(ui, |ui| {
-                        if self.highlighted == self.posts.len().checked_sub(10).unwrap_or(0) {
-                            self.spawn_more()
-                        }
-
-                        ui.vertical_centered_justified(|ui| {
-                            for (i, post) in self.posts.iter().enumerate() {
-                                ui_post_summary(ui, &*post, self.highlighted == i);
-                                if i != self.posts.len() {
-                                    ui.separator();
+        if self.posts.len() > 0 {
+            SidePanel::left("side_panel")
+                .default_width(350f32)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| {
+                            ui.vertical_centered_justified(|ui| {
+                                for (i, post) in self.posts.iter().enumerate() {
+                                    ui_post_summary(ui, &*post.inner, self.highlighted == i);
+                                    if i != self.posts.len() {
+                                        ui.separator();
+                                    }
                                 }
-                            }
-                        })
-                    });
-            });
+                            })
+                        });
+                });
+        }
 
         CentralPanel::default().show(ctx, |ui| {
-            if let Some(content) = &self.content {
-                content.render(ui);
-            } else {
-                nice_message(ui);
-            }
+            self.main_ui(ui);
         });
     }
 }
 
 impl SnuiApp {
-    fn try_extend(&mut self) {
+    fn main_ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(post) = self.posts.get_mut(self.viewed) {
+            if let Some(content) = &post.content {
+                content.render(ui);
+            } else {
+                if !post.fetching {
+                    post.fetching = true;
+                    get_content(post.inner.clone(), self.highlighted, self.sender.clone());
+                    nice_message(ui);
+                }
+            }
+        }
+    }
+
+    // fn change_main_content(&mut self, ui: &mut egui::Ui) {
+    //     let post = &self.posts[self.highlighted];
+
+    //     if let Some(content) = post.content {
+    //         content.render(ui)
+    //     }
+    // }
+
+    // fn conditional_change_ui(&mut self, ui: &mut egui::Ui) {
+    //     if self.config.immediate_posts {
+    //         self.change_main_content(ui);
+    //     }
+    // }
+
+    fn conditional_get_more_posts(&mut self) {
+        if self.highlighted == self.posts.len().checked_sub(10).unwrap_or(0) {
+            self.get_more_posts()
+        }
+    }
+
+    fn handle_action(&mut self, action: Action, frame: &mut epi::Frame) {
+        match action {
+            Action::PostDown => {
+                self.highlighted = self.highlighted.checked_add(1).unwrap_or(usize::MAX);
+
+                self.conditional_get_more_posts();
+            }
+
+            Action::PostUp => {
+                self.highlighted = std::cmp::min(
+                    self.posts.len(),
+                    self.highlighted.checked_sub(1).unwrap_or(0),
+                );
+
+                self.conditional_get_more_posts();
+            }
+
+            Action::OpenPost => {
+                if !self.config.immediate_posts {
+                    self.viewed = self.highlighted
+                }
+            }
+        }
+    }
+
+    fn try_receive(&mut self, frame: &mut epi::Frame) {
         if let Ok(message) = self.receiver.try_recv() {
             match message {
                 Message::PostsReady(mut posts, feed) => {
                     self.feed = Some(feed);
                     self.posts.append(&mut posts);
                 }
+                Message::ContentReady(content, post_id) => {
+                    println!("Content is ready for {}", post_id);
+                    match content {
+                        snew::content::Content::Text(text) => {
+                            self.posts[post_id].content = Some(Arc::new(text));
+                        }
+                        snew::content::Content::Image(image) => {
+                            decode_image(image, post_id, self.sender.clone());
+                        }
+                    }
+
+                },
+                Message::ImageDecoded(image, size, post_id) => {
+                    let handle = self.image_manager.store(
+                        self.highlighted,
+                        image,
+                        size,
+                        frame.tex_allocator(),
+                    );
+                    if let Some(handle) = handle {
+                        self.posts[post_id].content = Some(Arc::new(handle))
+                    }
+                },
             }
         }
     }
-    fn spawn_more(&mut self) {
+    fn get_more_posts(&mut self) {
         if let Some(feed) = self.feed.take() {
-            spawn_more(feed, self.sender.clone());
+            get_more_posts(feed, self.sender.clone());
         }
     }
 }
 
-pub(crate) trait MainContent: std::fmt::Debug {
+type PostId = usize;
+
+#[derive(Debug, Clone)]
+pub struct ViewablePost {
+    pub fetching: bool,
+    pub content: Option<Arc<dyn MainContent + Send + Sync>>,
+    pub inner: Arc<Post>
+}
+
+impl From<Post> for ViewablePost {
+    fn from(post: Post) -> Self {
+       Self {
+           fetching: false,
+           inner: Arc::new(post),
+           content: None
+       } 
+    }
+}
+
+pub trait MainContent: std::fmt::Debug {
     fn render(&self, ui: &mut egui::Ui);
 }
 
@@ -223,15 +292,15 @@ pub(crate) enum SnuiLayout {
     HorizontalSplit,
 }
 
-#[derive(Debug, Clone)]
-pub enum Input {
-    Username(String),
-    Password(String),
-    ClientID(String),
-    ClientSecret(String),
-}
+// #[derive(Debug, Clone)]
+// pub enum Input {
+//     Username(String),
+//     Password(String),
+//     ClientID(String),
+//     ClientSecret(String),
+// }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub enum Action {
     /// Currently marked post should be one higher
     PostUp,

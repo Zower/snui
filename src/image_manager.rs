@@ -24,30 +24,20 @@ impl ImageManager {
     pub fn store(
         &mut self,
         post_id: usize,
-        image: &[u8],
+        image: Vec<egui::Color32>,
+        size: (usize, usize),
         allocator: &mut dyn eframe::epi::TextureAllocator,
     ) -> Option<Image> {
-        let image = image::load_from_memory(image);
 
-        if let Ok(image) = image {
-            let image = image.to_rgba8();
-            let size = (image.width() as usize, image.height() as usize);
-            let id = allocator.alloc_srgba_premultiplied(
-                size,
-                &image
-                    .chunks(4)
-                    .map(|pixel| {
-                        egui::Color32::from_rgba_unmultiplied(
-                            pixel[0], pixel[1], pixel[2], pixel[3],
-                        )
-                    })
-                    .collect::<Vec<egui::Color32>>(),
-            );
-            let image = Image::new(id, size);
-            self.images.insert(post_id, image);
+        // let size = (image.width() as usize, image.height() as usize);
+        let id = allocator.alloc_srgba_premultiplied(
+            size,
+            &image
+        );
+        let image = Image::new(id, size);
+        self.images.insert(post_id, image);
 
-            return Some(image);
-        }
+        return Some(image);
 
         None
     }
