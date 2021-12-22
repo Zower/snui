@@ -2,17 +2,13 @@ use crate::{image_manager::Image, MainContent};
 use eframe::egui::{self, ScrollArea};
 use snew::things::Post;
 
-
 impl MainContent for Image {
     fn render(&self, ui: &mut egui::Ui) {
         ScrollArea::both().show(ui, |ui| {
             let mut size = egui::Vec2::new(self.size.0 as f32, self.size.1 as f32);
             size *= (ui.available_width() / size.x).min(1.0);
             size *= (ui.available_height() / size.y).min(1.0);
-            ui.image(
-                self.id,
-                size
-            );
+            ui.image(self.id, size);
         })
     }
 }
@@ -22,7 +18,6 @@ pub fn ui_post_summary(ui: &mut egui::Ui, post: &Post, highlight: bool) {
         if highlight {
             ui.visuals_mut().widgets.noninteractive.fg_stroke =
                 egui::Stroke::new(10f32, egui::Color32::WHITE);
-            
         }
 
         let max_chars = (ui.available_width() / 10f32) as usize;

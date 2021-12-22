@@ -5,7 +5,7 @@ use snew::things::PostFeed;
 
 use crate::{
     input::{KeyBind, KeyBinds},
-    Action, ViewablePost, PostId,
+    Action, PostId, ViewablePost,
 };
 
 #[derive(Debug)]

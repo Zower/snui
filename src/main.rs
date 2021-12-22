@@ -1,25 +1,25 @@
+mod components;
 mod config;
 mod fetch;
 mod image_manager;
 mod impl_render;
 mod input;
-mod components;
 
 use std::{fs, sync::Arc, vec};
 
-use config::{State, FileConfig, Options};
+use components::{Handle, WindowKind, Windows};
+use config::{FileConfig, Options, State};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use fetch::{decode_image, get_content, get_more_posts, Message};
 use image_manager::ImageManager;
-use impl_render::{ui_post_summary};
+use impl_render::ui_post_summary;
 use input::KeyPress;
-use components::{Handle, Windows, WindowKind};
 
 use serde::Deserialize;
 use snew::{
     auth::authenticator::ApplicationAuthenticator,
     reddit::{self, Reddit},
-    things::{Post},
+    things::Post,
 };
 
 use eframe::{
@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         layout: SnuiLayout::HorizontalSplit,
         collapsed: true,
         num_senders: 0,
-        windows: Windows::new()
+        windows: Windows::new(),
     };
 
     let native_options = eframe::NativeOptions {
@@ -120,7 +120,7 @@ impl epi::App for SnuiApp {
 
         if self.num_senders > 0 {
             ctx.request_repaint();
-        } 
+        }
 
         for event in &ctx.input().events {
             let action = match event {
@@ -159,9 +159,7 @@ impl epi::App for SnuiApp {
                         });
                     }
                 });
-
             });
-
         });
 
         if self.state.posts.len() > 0 {
@@ -208,7 +206,11 @@ impl SnuiApp {
             } else {
                 if !post.fetching {
                     post.fetching = true;
-                    get_content(post.inner.clone(), self.state.highlighted, self.sender.clone());
+                    get_content(
+                        post.inner.clone(),
+                        self.state.highlighted,
+                        self.sender.clone(),
+                    );
                     self.num_senders += 1;
                     nice_message(ui);
                 }
@@ -225,7 +227,8 @@ impl SnuiApp {
     fn handle_action(&mut self, action: Action, ctx: &egui::CtxRef) {
         match action {
             Action::PostDown => {
-                self.state.highlighted = self.state.highlighted.checked_add(1).unwrap_or(usize::MAX);
+                self.state.highlighted =
+                    self.state.highlighted.checked_add(1).unwrap_or(usize::MAX);
 
                 self.conditional_get_more_posts();
             }
@@ -245,9 +248,7 @@ impl SnuiApp {
                 }
             }
             Action::ToggleCollapse => self.collapsed = !self.collapsed,
-            Action::OpenSubredditWindow => {
-                self.windows.open(WindowKind::Subreddit)
-            },
+            Action::OpenSubredditWindow => self.windows.open(WindowKind::Subreddit),
         }
     }
 

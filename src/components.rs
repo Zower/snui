@@ -12,14 +12,15 @@ pub struct Windows {
 impl Windows {
     pub fn new() -> Self {
         Self {
-            subreddit: SubredditWindow { request_focus: true, window: WindowState::new(None) }
+            subreddit: SubredditWindow {
+                request_focus: true,
+                window: WindowState::new(None),
+            },
         }
     }
     pub fn open(&mut self, kind: WindowKind) {
         match kind {
-            WindowKind::Subreddit => {
-                self.subreddit.window.open = true
-            }
+            WindowKind::Subreddit => self.subreddit.window.open = true,
         }
     }
 
@@ -33,20 +34,20 @@ impl Windows {
 }
 
 pub enum WindowKind {
-    Subreddit
+    Subreddit,
 }
 
 #[derive(Debug)]
 struct WindowState<T> {
     open: bool,
-    inner: T
+    inner: T,
 }
 
-impl <T> WindowState <T> {
+impl<T> WindowState<T> {
     fn new(t: T) -> Self {
         Self {
             open: false,
-            inner: t
+            inner: t,
         }
     }
 }
@@ -62,7 +63,7 @@ impl Handle for SubredditWindow {
         state.posts.clear();
 
         state.feed = Some(reddit.subreddit(&input).hot());
-        
+
         state.highlighted = 0;
         state.viewed = 0;
     }
@@ -78,31 +79,32 @@ impl Show for SubredditWindow {
 
     fn show(&mut self, ctx: &egui::CtxRef) -> Self::Output {
         let mut should_close = false;
-        egui::Window::new("Choose subreddit").open(&mut self.window.open).show(ctx, |ui| {
-            let mut text = self.window.inner.take().unwrap_or(String::new());
-            let response = ui.add(egui::TextEdit::singleline(&mut text));
+        egui::Window::new("Choose subreddit")
+            .open(&mut self.window.open)
+            .show(ctx, |ui| {
+                let mut text = self.window.inner.take().unwrap_or(String::new());
+                let response = ui.add(egui::TextEdit::singleline(&mut text));
 
-            if self.request_focus {
-                response.request_focus();
-                self.request_focus = false;
-            }
+                if self.request_focus {
+                    response.request_focus();
+                    self.request_focus = false;
+                }
 
-            self.window.inner = Some(text);
+                self.window.inner = Some(text);
 
-            if response.lost_focus() && ui.input().key_pressed(egui::Key::Enter) {
-                should_close = true;
-            }        
-        });
+                if response.lost_focus() && ui.input().key_pressed(egui::Key::Enter) {
+                    should_close = true;
+                }
+            });
 
         return if should_close {
             self.window.open = false;
             self.window.inner.take()
         } else {
             None
-        }
+        };
     }
 }
-
 
 #[derive(Debug)]
 pub struct SubredditWindow {
