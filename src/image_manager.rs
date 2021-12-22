@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use eframe::egui;
-use image;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Image {

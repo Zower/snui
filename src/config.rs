@@ -1,14 +1,29 @@
 use std::{collections::HashMap, fmt};
 
 use serde_derive::Deserialize;
+use snew::things::PostFeed;
 
 use crate::{
     input::{KeyBind, KeyBinds},
-    Action,
+    Action, ViewablePost, PostId,
 };
 
 #[derive(Debug)]
-pub struct Config {
+pub struct State {
+    /// Currently loaded feed.
+    pub feed: Option<PostFeed>,
+    /// Posts that are fetched and can be displayed
+    pub posts: Vec<ViewablePost>,
+    /// Currently highlighted post in left pane
+    pub highlighted: PostId,
+    /// Currently viewed post in left pane
+    pub viewed: PostId,
+    /// User options
+    pub options: Options,
+}
+
+#[derive(Debug)]
+pub struct Options {
     /// The refresh token for the users account.
     pub refresh_token: Option<String>,
     /// Whether the post is immediately rendered upon highlight, or if [`Action::OpenPost`] must be performed
@@ -17,7 +32,7 @@ pub struct Config {
     pub keybinds: KeyBinds,
 }
 
-impl From<FileConfig> for Config {
+impl From<FileConfig> for Options {
     fn from(fc: FileConfig) -> Self {
         let mut keybinds = KeyBinds::default();
         for (key, details) in fc.binds.into_iter() {

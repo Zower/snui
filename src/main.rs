@@ -3,21 +3,23 @@ mod fetch;
 mod image_manager;
 mod impl_render;
 mod input;
+mod components;
 
 use std::{fs, sync::Arc, vec};
 
-use config::{Config, FileConfig};
+use config::{State, FileConfig, Options};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use fetch::{decode_image, get_content, get_more_posts, Message};
 use image_manager::ImageManager;
-use impl_render::ui_post_summary;
+use impl_render::{ui_post_summary};
 use input::KeyPress;
+use components::{Handle, Windows, WindowKind};
 
 use serde::Deserialize;
 use snew::{
     auth::authenticator::ApplicationAuthenticator,
     reddit::{self, Reddit},
-    things::{Post, PostFeed},
+    things::{Post},
 };
 
 use eframe::{
@@ -26,36 +28,32 @@ use eframe::{
 };
 
 #[derive(Debug)]
-struct SnuiApp {
+pub struct SnuiApp {
     /// The reddit client to make requests with
     client: Reddit,
-    // Configuration
-    config: Config,
-    /// Currently loaded feed.
-    feed: Option<PostFeed>,
-    /// Posts that are fetched and can be displayed
-    posts: Vec<ViewablePost>,
-    /// Currently highlighted post in left pane
-    highlighted: PostId,
-    /// Currently viewed post in left pane
-    viewed: PostId,
+    // App state
+    state: State,
     /// Image manager
     image_manager: ImageManager,
     /// Receiver of messages created on other threads
     receiver: Receiver<Message>,
-    /// Sender for giving out,
+    /// Sender for giving out
     sender: Sender<Message>,
-    /// test
-    collapsed: bool,
     /// Current layout of the application
     layout: SnuiLayout,
+    /// testing after this point
+    collapsed: bool,
+    /// senders
+    num_senders: u32,
+    ///
+    windows: Windows,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = fs::read_to_string("./config.toml")
         .expect("Error opening config file. Please create ./config.toml");
 
-    let config: Config = toml::from_str::<FileConfig>(&config)
+    let options: Options = toml::from_str::<FileConfig>(&config)
         .expect("Error parsing config file. Please check ./config.toml")
         .into();
 
@@ -72,16 +70,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = SnuiApp {
         client,
-        feed: Some(feed),
-        posts: vec![],
-        highlighted: 0,
-        viewed: 0,
+        state: State {
+            feed: Some(feed),
+            posts: vec![],
+            highlighted: 0,
+            viewed: 0,
+            options,
+        },
         image_manager: ImageManager::default(),
         receiver: r,
         sender: s,
-        config,
-        collapsed: true,
         layout: SnuiLayout::HorizontalSplit,
+        collapsed: true,
+        num_senders: 0,
+        windows: Windows::new()
     };
 
     let native_options = eframe::NativeOptions {
@@ -103,13 +105,22 @@ impl epi::App for SnuiApp {
         _frame: &mut epi::Frame<'_>,
         _storage: Option<&dyn eframe::epi::Storage>,
     ) {
-        self.get_more_posts()
     }
 
     fn update(&mut self, ctx: &egui::CtxRef, frame: &mut epi::Frame<'_>) {
-        if self.config.immediate_posts {
-            self.viewed = self.highlighted;
+        if self.state.options.immediate_posts {
+            self.state.viewed = self.state.highlighted;
         }
+
+        if self.state.posts.len() == 0 {
+            self.get_more_posts()
+        }
+
+        self.windows.show(ctx, &self.client, &mut self.state);
+
+        if self.num_senders > 0 {
+            ctx.request_repaint();
+        } 
 
         for event in &ctx.input().events {
             let action = match event {
@@ -118,50 +129,59 @@ impl epi::App for SnuiApp {
                     pressed,
                     modifiers: m,
                 } if (!pressed) => self
-                    .config
+                    .state
+                    .options
                     .keybinds
                     .action(KeyPress::new((*key).into(), [m.command, m.shift, m.alt])),
                 _ => None,
             };
 
             if let Some(action) = action {
-                self.handle_action(action, frame);
+                self.handle_action(action, ctx);
             };
         }
-
-        // for now
-        ctx.request_repaint();
 
         self.try_receive(frame);
 
         TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            menu::bar(ui, |ui| {
-                menu::menu(ui, "App", |ui| {
-                    if ui.button("Quit").clicked() {
-                        frame.quit();
+            ui.horizontal(|ui| {
+                menu::bar(ui, |ui| {
+                    menu::menu(ui, "App", |ui| {
+                        if ui.button("Quit").clicked() {
+                            frame.quit();
+                        }
+                    });
+                    if self.state.posts.len() > 0 {
+                        ui.centered_and_justified(|ui| {
+                            let post = &self.state.posts[self.state.highlighted].inner;
+                            ui.label(&post.title);
+                            ui.label(format!("By /u/{}\t{} points", &post.author, &post.score));
+                        });
                     }
                 });
+
             });
+
         });
 
-        if self.posts.len() > 0 {
+        if self.state.posts.len() > 0 {
             if self.collapsed {
                 SidePanel::left("side_panel")
                     .default_width(350f32)
                     .show(ctx, |ui| {
-                        posts(ui, &self.posts, &self.highlighted);
+                        posts(ui, &self.state.posts, &self.state.highlighted);
                     });
             } else {
                 Window::new("post_window")
                     .default_width(350f32)
                     .default_height(800f32)
                     .show(&ctx, |ui| {
-                        posts(ui, &self.posts, &self.highlighted);
+                        posts(ui, &self.state.posts, &self.state.highlighted);
                     });
             }
         }
 
-        CentralPanel::default().show(ctx, |ui| {
+        CentralPanel::default().show(&ctx.clone(), |ui| {
             self.main_ui(ui);
         });
     }
@@ -182,13 +202,14 @@ fn posts(ui: &mut egui::Ui, posts: &Vec<ViewablePost>, highlighted: &usize) {
 
 impl SnuiApp {
     fn main_ui(&mut self, ui: &mut egui::Ui) {
-        if let Some(post) = self.posts.get_mut(self.viewed) {
+        if let Some(post) = self.state.posts.get_mut(self.state.viewed) {
             if let Some(content) = &post.content {
                 content.render(ui);
             } else {
                 if !post.fetching {
                     post.fetching = true;
-                    get_content(post.inner.clone(), self.highlighted, self.sender.clone());
+                    get_content(post.inner.clone(), self.state.highlighted, self.sender.clone());
+                    self.num_senders += 1;
                     nice_message(ui);
                 }
             }
@@ -196,34 +217,37 @@ impl SnuiApp {
     }
 
     fn conditional_get_more_posts(&mut self) {
-        if self.highlighted == self.posts.len().checked_sub(10).unwrap_or(0) {
+        if self.state.highlighted == self.state.posts.len().checked_sub(10).unwrap_or(0) {
             self.get_more_posts()
         }
     }
 
-    fn handle_action(&mut self, action: Action, frame: &mut epi::Frame) {
+    fn handle_action(&mut self, action: Action, ctx: &egui::CtxRef) {
         match action {
             Action::PostDown => {
-                self.highlighted = self.highlighted.checked_add(1).unwrap_or(usize::MAX);
+                self.state.highlighted = self.state.highlighted.checked_add(1).unwrap_or(usize::MAX);
 
                 self.conditional_get_more_posts();
             }
 
             Action::PostUp => {
-                self.highlighted = std::cmp::min(
-                    self.posts.len(),
-                    self.highlighted.checked_sub(1).unwrap_or(0),
+                self.state.highlighted = std::cmp::min(
+                    self.state.posts.len(),
+                    self.state.highlighted.checked_sub(1).unwrap_or(0),
                 );
 
                 self.conditional_get_more_posts();
             }
 
             Action::OpenPost => {
-                if !self.config.immediate_posts {
-                    self.viewed = self.highlighted
+                if !self.state.options.immediate_posts {
+                    self.state.viewed = self.state.highlighted
                 }
             }
             Action::ToggleCollapse => self.collapsed = !self.collapsed,
+            Action::OpenSubredditWindow => {
+                self.windows.open(WindowKind::Subreddit)
+            },
         }
     }
 
@@ -231,34 +255,40 @@ impl SnuiApp {
         if let Ok(message) = self.receiver.try_recv() {
             match message {
                 Message::PostsReady(mut posts, feed) => {
-                    self.feed = Some(feed);
-                    self.posts.append(&mut posts);
+                    self.state.feed = Some(feed);
+                    self.state.posts.append(&mut posts);
+                    self.num_senders -= 1;
                 }
                 Message::ContentReady(content, post_id) => match content {
                     snew::content::Content::Text(text) => {
-                        self.posts[post_id].content = Some(Arc::new(text));
+                        self.state.posts[post_id].content = Some(Arc::new(text));
+                        self.num_senders -= 1;
                     }
                     snew::content::Content::Image(image) => {
                         decode_image(image, post_id, self.sender.clone());
+                        self.num_senders += 1;
+                        self.num_senders -= 1;
                     }
                 },
                 Message::ImageDecoded(image, size, post_id) => {
                     let handle = self.image_manager.store(
-                        self.highlighted,
+                        self.state.highlighted,
                         image,
                         size,
                         frame.tex_allocator(),
                     );
                     if let Some(handle) = handle {
-                        self.posts[post_id].content = Some(Arc::new(handle))
+                        self.state.posts[post_id].content = Some(Arc::new(handle))
                     }
+                    self.num_senders -= 1;
                 }
             }
         }
     }
     fn get_more_posts(&mut self) {
-        if let Some(feed) = self.feed.take() {
+        if let Some(feed) = self.state.feed.take() {
             get_more_posts(feed, self.sender.clone());
+            self.num_senders += 1;
         }
     }
 }
@@ -308,6 +338,8 @@ pub enum Action {
     PostDown,
     /// Open the currrently marked post
     OpenPost,
+    /// Open subreddit window
+    OpenSubredditWindow,
     /// Toggle collapse of postfeed
     ToggleCollapse,
 }

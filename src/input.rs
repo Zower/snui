@@ -1,8 +1,6 @@
 use crate::{config::Key, Action};
 use std::collections::HashMap;
 
-use eframe::egui;
-
 /// A map from keys to actions.
 #[derive(Debug)]
 pub struct KeyBinds {

@@ -5,3 +5,4 @@ k = "PostUp"
 j = "PostDown" 
 enter = "OpenPost" 
 p = { action = "ToggleCollapse", modifiers = ["shift"] }
+r = "OpenSubredditWindow"

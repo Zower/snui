@@ -2,12 +2,16 @@ use crate::{image_manager::Image, MainContent};
 use eframe::egui::{self, ScrollArea};
 use snew::things::Post;
 
+
 impl MainContent for Image {
     fn render(&self, ui: &mut egui::Ui) {
         ScrollArea::both().show(ui, |ui| {
+            let mut size = egui::Vec2::new(self.size.0 as f32, self.size.1 as f32);
+            size *= (ui.available_width() / size.x).min(1.0);
+            size *= (ui.available_height() / size.y).min(1.0);
             ui.image(
                 self.id,
-                egui::Vec2::new(self.size.0 as f32, self.size.1 as f32),
+                size
             );
         })
     }
@@ -27,12 +31,16 @@ pub fn ui_post_summary(ui: &mut egui::Ui, post: &Post, highlight: bool) {
         let url = create_display_string(&post.url, max_chars);
 
         let title = egui::Label::new(title).wrap(true).heading();
-        ui.add(title);
+        let response = ui.add(title);
+
+        if highlight {
+            response.scroll_to_me(egui::Align::Center)
+        }
 
         ui.horizontal(|ui| {
             ui.label(url);
             ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
-                ui.label("0")
+                // ui.label(post.num_comments)
             });
         });
         ui.label(post.score.to_string() + " points");
