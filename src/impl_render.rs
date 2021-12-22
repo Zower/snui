@@ -35,7 +35,7 @@ pub fn ui_post_summary(ui: &mut egui::Ui, post: &Post, highlight: bool) {
         ui.horizontal(|ui| {
             ui.label(url);
             ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
-                // ui.label(post.num_comments)
+                ui.label(post.num_comments)
             });
         });
         ui.label(post.score.to_string() + " points");
