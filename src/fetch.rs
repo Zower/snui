@@ -2,10 +2,12 @@ use bytes::Bytes;
 use crossbeam_channel::Sender;
 use eframe::egui;
 use snew::{
+    auth::UserAuthenticator,
     content::Content,
+    reddit::Reddit,
     things::{Post, PostFeed},
 };
-use std::{sync::Arc, thread};
+use std::{sync::Arc, thread, time::Duration};
 
 use crate::{PostId, ViewablePost};
 // todo: make this module a bit less.. manual
@@ -14,6 +16,7 @@ pub enum Message {
     PostsReady(Vec<ViewablePost>, PostFeed),
     ContentReady(Content, PostId),
     ImageDecoded(Vec<egui::Color32>, (usize, usize), PostId),
+    UserLoggedIn(UserAuthenticator),
 }
 
 pub fn get_more_posts(mut feed: PostFeed, s: Sender<Message>) {
@@ -52,5 +55,25 @@ pub fn decode_image(image: Bytes, post_id: PostId, s: Sender<Message>) {
             .collect::<Vec<egui::Color32>>();
 
         let _ = s.send(Message::ImageDecoded(image, size, post_id));
+    });
+}
+
+pub fn start_login_process(client_id: String, s: Sender<Message>) {
+    thread::spawn(move || {
+        let auth = Reddit::perform_code_flow(
+            client_id,
+            "Success. You can now return to SnUI.",
+            Some(Duration::from_secs(240)),
+        );
+
+        match auth {
+            Ok(auth) => {
+                s.send(Message::UserLoggedIn(auth));
+            }
+
+            Err(err) => {
+                println!("ERROR {}", err)
+            }
+        };
     });
 }

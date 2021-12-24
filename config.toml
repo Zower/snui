@@ -6,3 +6,5 @@ j = "PostDown"
 enter = "OpenPost" 
 p = { action = "ToggleCollapse", modifiers = ["shift"] }
 r = "OpenSubredditWindow"
+l = "Login"
+f = "Frontpage"

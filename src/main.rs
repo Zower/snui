@@ -7,17 +7,17 @@ mod input;
 
 use std::{fs, sync::Arc, vec};
 
-use components::{Handle, WindowKind, Windows};
+use components::{WindowKind, Windows};
 use config::{FileConfig, Options, State};
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use fetch::{decode_image, get_content, get_more_posts, Message};
+use fetch::{decode_image, get_content, get_more_posts, start_login_process, Message};
 use image_manager::ImageManager;
 use impl_render::ui_post_summary;
 use input::KeyPress;
 
 use serde::Deserialize;
 use snew::{
-    auth::authenticator::ApplicationAuthenticator,
+    auth::ApplicationAuthenticator,
     reddit::{self, Reddit},
     things::Post,
 };
@@ -238,8 +238,6 @@ impl SnuiApp {
                     self.state.posts.len(),
                     self.state.highlighted.checked_sub(1).unwrap_or(0),
                 );
-
-                self.conditional_get_more_posts();
             }
 
             Action::OpenPost => {
@@ -247,8 +245,19 @@ impl SnuiApp {
                     self.state.viewed = self.state.highlighted
                 }
             }
+            Action::Login => {
+                start_login_process("kt3c_AvYiWqN5dO1lzMbjg".to_string(), self.sender.clone());
+            }
             Action::ToggleCollapse => self.collapsed = !self.collapsed,
             Action::OpenSubredditWindow => self.windows.open(WindowKind::Subreddit),
+            Action::Frontpage => {
+                self.state.posts.clear();
+
+                self.state.feed = Some(self.client.frontpage().hot());
+
+                self.state.highlighted = 0;
+                self.state.viewed = 0;
+            }
         }
     }
 
@@ -270,6 +279,11 @@ impl SnuiApp {
                         self.num_senders += 1;
                         self.num_senders -= 1;
                     }
+                    snew::content::Content::Html(_) => {
+                        self.state.posts[post_id].content = Some(Arc::new(
+                            "Sorry, this is a webpage. I can't render that yet.".to_string(),
+                        ));
+                    }
                 },
                 Message::ImageDecoded(image, size, post_id) => {
                     let handle = self.image_manager.store(
@@ -282,6 +296,9 @@ impl SnuiApp {
                         self.state.posts[post_id].content = Some(Arc::new(handle))
                     }
                     self.num_senders -= 1;
+                }
+                Message::UserLoggedIn(auth) => {
+                    self.client.set_authenticator(auth);
                 }
             }
         }
@@ -339,8 +356,12 @@ pub enum Action {
     PostDown,
     /// Open the currrently marked post
     OpenPost,
+    /// Go to frontpage
+    Frontpage,
     /// Open subreddit window
     OpenSubredditWindow,
+    /// Start login process
+    Login,
     /// Toggle collapse of postfeed
     ToggleCollapse,
 }

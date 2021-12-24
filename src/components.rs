@@ -18,9 +18,13 @@ impl Windows {
             },
         }
     }
+
     pub fn open(&mut self, kind: WindowKind) {
         match kind {
-            WindowKind::Subreddit => self.subreddit.window.open = true,
+            WindowKind::Subreddit => {
+                self.subreddit.window.open = true;
+                self.subreddit.request_focus = true;
+            }
         }
     }
 
