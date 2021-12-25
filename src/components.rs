@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
-use eframe::egui::{self, CentralPanel, CtxRef, Layout, Response, SidePanel, Window};
+use eframe::egui::{
+    self, CentralPanel, CtxRef, Layout, Response, SidePanel, TopBottomPanel, Window,
+};
 use serde::{Deserialize, Serialize};
 use snew::{
     reddit::Reddit,
-    things::{Me, Post, PostFeed},
+    things::{Me, Post},
 };
 
 use crate::{
     config::{Options, State},
-    PostId, Render, ViewablePost,
+    Render,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,28 +33,21 @@ impl ComponentMode {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct MainContentComponent {
-    #[serde(skip)]
-    pub content: Option<Arc<dyn Render>>,
     pub mode: ComponentMode,
 }
 
 impl MainContentComponent {
-    pub fn new(content: Option<Arc<dyn Render>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            content,
             mode: ComponentMode::Snapped,
         }
     }
 
-    pub fn set_content(&mut self, content: Arc<dyn Render>) {
-        self.content = Some(content);
-    }
-
-    pub fn render(&mut self, ctx: &CtxRef, options: &Options) {
+    pub fn render(&self, ctx: &CtxRef, options: &Options, content: &Box<dyn Render>) {
         match self.mode {
             ComponentMode::Snapped => {
                 CentralPanel::default().show(&ctx, |ui| {
-                    self.render_if_some(ui);
+                    content.render(ui);
                 });
             }
             ComponentMode::Floating => {
@@ -60,11 +55,8 @@ impl MainContentComponent {
                     .title_bar(options.show_title_bars)
                     .default_width(800f32)
                     .default_height(600f32)
-                    .min_width(400f32)
-                    .min_height(200f32)
-                    .resizable(true)
                     .show(&ctx, |ui| {
-                        self.render_if_some(ui);
+                        content.render(ui);
                     });
             }
             ComponentMode::Closed => {}
@@ -74,25 +66,27 @@ impl MainContentComponent {
     pub fn toggle_mode(&mut self) {
         self.mode = self.mode.next();
     }
+}
 
-    fn render_if_some(&self, ui: &mut egui::Ui) -> bool {
-        if let Some(content) = &self.content {
-            content.render(ui);
-            true
-        } else {
-            false
+pub type PostId = usize;
+
+#[derive(Debug, Clone)]
+pub struct ViewablePost {
+    pub post_id: PostId,
+    pub inner: Arc<Post>,
+}
+
+impl From<(Post, PostId)> for ViewablePost {
+    fn from(post: (Post, PostId)) -> Self {
+        Self {
+            post_id: post.1,
+            inner: Arc::new(post.0),
         }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PostFeedComponent {
-    /// Currently loaded feed.
-    #[serde(skip)]
-    pub feed: Option<PostFeed>,
-    /// Posts that are fetched and can be displayed
-    #[serde(skip)]
-    pub posts: Vec<ViewablePost>,
     /// Currently highlighted post in left pane
     #[serde(skip)]
     pub highlighted: PostId,
@@ -104,12 +98,10 @@ pub struct PostFeedComponent {
 }
 
 impl PostFeedComponent {
-    pub fn new(mut feed: PostFeed) -> Self {
-        feed.limit = 15;
-
+    pub fn new() -> Self {
         Self {
-            feed: Some(feed),
-            posts: vec![],
+            // feed: Some(feed),
+            // posts: vec![],
             highlighted: 0,
             viewed: 0,
             mode: ComponentMode::Snapped,
@@ -117,32 +109,34 @@ impl PostFeedComponent {
         }
     }
 
-    pub fn toggle_mode(&mut self) {
-        self.mode = self.mode.next();
+    pub fn reset(&mut self) {
+        self.viewed = 0;
+        self.highlighted = 0;
     }
 
-    pub fn set_feed(&mut self, mut feed: PostFeed) {
-        feed.limit = 15;
-        self.feed = Some(feed);
+    pub fn toggle_mode(&mut self) {
+        self.mode = self.mode.next();
     }
 
     pub fn set_h_equal_v(&mut self) {
         self.viewed = self.highlighted;
     }
-
-    pub fn take(&mut self) -> Option<PostFeed> {
-        self.feed.take()
-    }
 }
 
 impl PostFeedComponent {
-    pub fn render(&mut self, ctx: &CtxRef, options: &Options, auto_scroll: bool) {
+    pub fn render(
+        &mut self,
+        posts: &Vec<ViewablePost>,
+        ctx: &CtxRef,
+        options: &Options,
+        auto_scroll: bool,
+    ) {
         match self.mode {
             ComponentMode::Snapped => {
                 SidePanel::left("Posts")
                     .default_width(350f32)
                     .show(ctx, |ui| {
-                        self.posts(ui, auto_scroll);
+                        self.posts(posts, ui, auto_scroll);
                     });
             }
             ComponentMode::Floating => {
@@ -151,40 +145,20 @@ impl PostFeedComponent {
                     .default_height(800f32)
                     .title_bar(options.show_title_bars)
                     .show(&ctx, |ui| {
-                        self.posts(ui, auto_scroll);
+                        self.posts(posts, ui, auto_scroll);
                     });
             }
             ComponentMode::Closed => {}
         }
     }
 
-    pub fn render_summary(&self, ui: &mut egui::Ui, user: &Option<Me>) {
-        ui.centered_and_justified(|ui| {
-            if self.posts.len() > 0 {
-                let post = &self.posts[self.highlighted].inner;
-                ui.label(format!("{} by /u/{}", &post.title, &post.author));
-                ui.add_space(3f32);
-                ui.label(format!("{} points\t\t/r/{}", &post.score, &post.subreddit));
-                ui.add_space(3f32);
-            } else {
-                ui.label("Loading..");
-            }
-        });
-        if let Some(user) = user {
-            ui.with_layout(Layout::right_to_left(), |ui| {
-                ui.add_space(10f32);
-                ui.label(format!("Logged in as /u/{}", &user.name));
-            });
-        }
-    }
-
-    fn posts(&mut self, ui: &mut egui::Ui, auto_scroll: bool) {
+    fn posts(&mut self, posts: &Vec<ViewablePost>, ui: &mut egui::Ui, auto_scroll: bool) {
         egui::ScrollArea::vertical()
             .id_source("post_scroller")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.vertical_centered_justified(|ui| {
-                    for (i, post) in self.posts.iter().enumerate() {
+                    for (i, post) in posts.iter().enumerate() {
                         let is_highlighted = self.highlighted == i;
                         let response = Self::ui_post_summary(ui, &*post.inner, is_highlighted);
 
@@ -196,7 +170,7 @@ impl PostFeedComponent {
                             response.scroll_to_me(egui::Align::Center)
                         }
 
-                        if i != self.posts.len() {
+                        if i != posts.len() {
                             ui.separator();
                         }
                     }
@@ -248,6 +222,71 @@ impl PostFeedComponent {
         }
 
         new
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PostSummaryComponent {
+    pub mode: ComponentMode,
+}
+
+impl PostSummaryComponent {
+    pub fn new() -> Self {
+        Self {
+            mode: ComponentMode::Snapped,
+        }
+    }
+    pub fn render(
+        &self,
+        ctx: &CtxRef,
+        options: &Options,
+        post: Option<&ViewablePost>,
+        user: Option<&Me>,
+    ) {
+        match self.mode {
+            ComponentMode::Snapped => {
+                TopBottomPanel::top("top_panel").show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        Self::render_summary(post, ui, user);
+                    });
+                });
+            }
+            ComponentMode::Floating => {
+                Window::new("Viewed post")
+                    .title_bar(options.show_title_bars)
+                    .default_width(500f32)
+                    .default_height(100f32)
+                    .resizable(true)
+                    .show(&ctx, |ui| {
+                        Self::render_summary(post, ui, user);
+                    });
+            }
+            ComponentMode::Closed => {}
+        }
+    }
+
+    pub fn toggle_mode(&mut self) {
+        self.mode = self.mode.next();
+    }
+
+    fn render_summary(post: Option<&ViewablePost>, ui: &mut egui::Ui, user: Option<&Me>) {
+        ui.centered_and_justified(|ui| {
+            if let Some(post) = post {
+                let post = &post.inner;
+                let user_string = if let Some(user) = user {
+                    format!("Logged in as /u/{}", user.name)
+                } else {
+                    String::from("")
+                };
+
+                ui.label(format!(
+                    "{} by /u/{}\n{} points\t\t/r/{}\t\t\t\t\t{}",
+                    &post.title, &post.author, &post.score, &post.subreddit, user_string
+                ));
+            } else {
+                ui.label("Loading..");
+            }
+        });
     }
 }
 
@@ -316,7 +355,11 @@ pub trait Handle {
 impl Handle for SubredditWindow {
     type Input = String;
     fn handle(input: &Self::Input, reddit: &Reddit, state: &mut State) {
-        state.feed = PostFeedComponent::new(reddit.subreddit(&input).hot());
+        state.feed = Some(reddit.subreddit(input).hot());
+        state.posts.clear();
+        state.content_cache.clear();
+        state.feed_component.reset();
+
         state.mark_for_refresh = true;
     }
 }

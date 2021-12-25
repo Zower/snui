@@ -5,26 +5,23 @@ mod image_manager;
 mod impl_render;
 mod input;
 
-use std::sync::Arc;
-
-use components::{PostFeedComponent, WindowKind, Windows};
+use components::{
+    MainContentComponent, PostFeedComponent, PostSummaryComponent, WindowKind, Windows,
+};
 use config::State;
-use crossbeam_channel::{unbounded, Receiver, Sender};
-use fetch::{decode_image, get_content, get_more_posts, start_login_process, Message};
+use fetch::{Fetcher, Message, MorePosts};
 use image_manager::ImageManager;
 use input::KeyPress;
 
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use snew::{
     auth::{ApplicationAuthenticator, UserAuthenticator},
     reddit::{self, Reddit},
-    things::{Me, Post},
+    things::Me,
 };
 
-use eframe::{
-    egui::{self, TopBottomPanel},
-    epi,
-};
+use eframe::{egui, epi};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -37,12 +34,8 @@ pub struct SnuiApp {
     /// Image manager
     #[serde(skip)]
     image_manager: ImageManager,
-    /// Receiver of messages created on other threads
     #[serde(skip)]
-    receiver: Receiver<Message>,
-    /// Sender for giving out
-    #[serde(skip)]
-    sender: Sender<Message>,
+    fetcher: Fetcher,
     // /// Current layout of the application
     // layout: SnuiLayout,
     /// Windows that can pop up.
@@ -50,9 +43,6 @@ pub struct SnuiApp {
     /// Logged in user, if any.
     #[serde(skip)]
     user: Option<Me>,
-    /// Number of active senders.
-    #[serde(skip)]
-    num_senders: u32,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -64,18 +54,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     eframe::run_native(Box::new(app), native_options);
-}
-
-fn current_buffer<'a, T>(vec: &'a mut Vec<T>, idx: usize, amount: usize) -> &'a mut [T] {
-    if vec.len() <= amount * 2 {
-        &mut vec[..]
-    } else if idx.checked_sub(amount).is_none() {
-        &mut vec[..idx + amount]
-    } else if idx + amount > vec.len() {
-        &mut vec[idx - amount..]
-    } else {
-        &mut vec[idx - amount..idx + amount]
-    }
 }
 
 impl epi::App for SnuiApp {
@@ -103,7 +81,7 @@ impl epi::App for SnuiApp {
                 ));
 
                 self.user = self.client.me().ok();
-                self.state.feed.set_feed(self.client.frontpage().hot());
+                self.state.set_feed(self.client.frontpage().hot());
                 self.state.mark_for_refresh = true;
             }
         }
@@ -122,39 +100,16 @@ impl epi::App for SnuiApp {
 
     fn update(&mut self, ctx: &egui::CtxRef, frame: &mut epi::Frame<'_>) {
         if self.state.mark_for_refresh {
-            let (s, r) = unbounded();
-            self.sender = s;
-            self.receiver = r;
+            self.fetcher.reset();
 
             self.state.mark_for_refresh = false;
             self.get_more_posts();
         }
-        let current_buffer = current_buffer(
-            &mut self.state.feed.posts,
-            self.state.feed.viewed,
-            self.state.options.buffer_amount,
-        );
 
-        for post in current_buffer {
-            if !post.fetching {
-                post.fetching = true;
-                get_content(post.inner.clone(), post.post_id, self.sender.clone());
-                self.num_senders += 1;
-            }
-        }
+        self.state.buffer_posts(&mut self.fetcher);
 
         if self.state.options.immediate_posts {
-            self.state.feed.set_h_equal_v();
-        }
-
-        if self.num_senders > 0 {
-            ctx.request_repaint();
-        }
-
-        if let Some(post) = self.state.feed.posts.get(self.state.feed.viewed) {
-            if let Some(content) = &post.content {
-                self.state.main_content.set_content(content.clone());
-            }
+            self.state.feed_component.set_h_equal_v();
         }
 
         let mut has_moved = false;
@@ -183,15 +138,18 @@ impl epi::App for SnuiApp {
         self.try_receive(frame);
         self.windows.update(ctx, &self.client, &mut self.state);
 
-        TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                self.state.feed.render_summary(ui, &self.user);
-            });
-        });
+        self.state
+            .render_summary_component(&ctx, self.user.as_ref());
 
-        self.state.feed.render(ctx, &self.state.options, has_moved);
+        self.state
+            .feed_component
+            .render(&self.state.posts, ctx, &self.state.options, has_moved);
 
-        self.state.main_content.render(ctx, &self.state.options);
+        self.state.render_main_content(&ctx);
+
+        if self.fetcher.is_working() {
+            ctx.request_repaint();
+        }
     }
 }
 
@@ -199,7 +157,9 @@ impl SnuiApp {
     const CLIENT_ID: &'static str = "kt3c_AvYiWqN5dO1lzMbjg";
 
     fn conditional_get_more_posts(&mut self) {
-        if self.state.feed.highlighted >= self.state.feed.posts.len().checked_sub(10).unwrap_or(0) {
+        if self.state.feed_component.highlighted
+            >= self.state.posts.len().checked_sub(10).unwrap_or(0)
+        {
             self.get_more_posts()
         }
     }
@@ -208,39 +168,47 @@ impl SnuiApp {
         let mut has_moved = false;
         match action {
             Action::PostDown => {
-                self.state.feed.highlighted = self
+                self.state.feed_component.highlighted = self
                     .state
-                    .feed
+                    .feed_component
                     .highlighted
                     .checked_add(1)
                     .unwrap_or(usize::MAX)
-                    .min(self.state.feed.posts.len() - 1);
+                    .min(self.state.posts.len() - 1);
 
                 self.conditional_get_more_posts();
 
                 has_moved = true;
             }
             Action::PostUp => {
-                self.state.feed.highlighted =
-                    self.state.feed.highlighted.checked_sub(1).unwrap_or(0);
+                self.state.feed_component.highlighted = self
+                    .state
+                    .feed_component
+                    .highlighted
+                    .checked_sub(1)
+                    .unwrap_or(0);
 
                 has_moved = true;
             }
             Action::OpenPost => {
                 if !self.state.options.immediate_posts {
-                    self.state.feed.viewed = self.state.feed.highlighted
+                    self.state.feed_component.viewed = self.state.feed_component.highlighted
                 }
             }
             Action::Login => {
-                start_login_process(Self::CLIENT_ID, self.sender.clone());
+                self.fetcher.start_login_process();
             }
-            Action::TogglePostFeedMode => self.state.feed.toggle_mode(),
-            Action::ToggleMainContentMode => self.state.main_content.toggle_mode(),
+            Action::TogglePostFeedMode => self.state.feed_component.toggle_mode(),
+            Action::ToggleMainContentMode => self.state.main_component.toggle_mode(),
+            Action::TogglePostSummaryMode => self.state.summary_component.toggle_mode(),
             Action::OpenSubredditWindow => self.windows.open(WindowKind::Subreddit),
             Action::Frontpage => {
                 self.state.mark_for_refresh = true;
 
-                self.state.feed = PostFeedComponent::new(self.client.frontpage().hot());
+                self.state.set_feed(self.client.frontpage().hot());
+                self.state.posts.clear();
+                self.state.content_cache.clear();
+                self.state.feed_component.reset();
             }
         };
 
@@ -248,46 +216,36 @@ impl SnuiApp {
     }
 
     fn try_receive(&mut self, frame: &mut epi::Frame) {
-        if let Ok(message) = self.receiver.try_recv() {
+        if let Some(message) = self.fetcher.try_recv() {
             match message {
                 Message::PostsReady(posts, feed) => {
-                    self.state.feed.set_feed(feed);
-                    let mut idx = self.state.feed.posts.len();
-
-                    for post in posts {
-                        self.state.feed.posts.push((post, idx).into());
-                        idx += 1;
-                    }
-
-                    self.num_senders -= 1;
+                    self.state.set_feed(feed);
+                    self.state.extend_posts(posts);
                 }
                 Message::ContentReady(content, post_id) => match content {
                     snew::content::Content::Text(text) => {
-                        self.state.feed.posts[post_id].content = Some(Arc::new(text));
-                        self.num_senders -= 1;
+                        self.state.set_content(&post_id, Box::new(text));
                     }
                     snew::content::Content::Image(image) => {
-                        decode_image(image, post_id, self.sender.clone());
-                        self.num_senders += 1;
-                        self.num_senders -= 1;
+                        self.fetcher.decode_image(image, post_id);
                     }
                     snew::content::Content::Html(_) => {
-                        self.state.feed.posts[post_id].content = Some(Arc::new(
-                            "Sorry, this is a webpage. I can't render that yet.".to_string(),
-                        ));
+                        self.state.set_content(
+                            &post_id,
+                            Box::new(String::from("Sorry, I can't render this yet.")),
+                        );
                     }
                 },
-                Message::ImageDecoded(image, size, post_id) => {
+                Message::ImageDecoded(image, size, url) => {
                     let handle = self.image_manager.store(
-                        self.state.feed.highlighted,
+                        self.state.feed_component.highlighted,
                         image,
                         size,
                         frame.tex_allocator(),
                     );
                     if let Some(handle) = handle {
-                        self.state.feed.posts[post_id].content = Some(Arc::new(handle))
+                        self.state.set_content(&url, Box::new(handle));
                     }
-                    self.num_senders -= 1;
                 }
                 Message::UserLoggedIn(auth) => {
                     self.client.set_authenticator(auth);
@@ -295,35 +253,12 @@ impl SnuiApp {
             }
         }
     }
+
     fn get_more_posts(&mut self) {
-        if let Some(feed) = self.state.feed.take() {
-            get_more_posts(feed, self.sender.clone());
-            self.num_senders += 1;
-        }
+        self.fetcher
+            .get::<MorePosts>(self.client.clone(), &mut self.state);
     }
 }
-
-type PostId = usize;
-
-#[derive(Debug, Clone)]
-pub struct ViewablePost {
-    pub post_id: PostId,
-    pub fetching: bool,
-    pub content: Option<Arc<dyn Render + Send + Sync>>,
-    pub inner: Arc<Post>,
-}
-
-impl From<(Post, PostId)> for ViewablePost {
-    fn from(post: (Post, PostId)) -> Self {
-        Self {
-            post_id: post.1,
-            fetching: false,
-            inner: Arc::new(post.0),
-            content: None,
-        }
-    }
-}
-
 /// Something that can be rendered.
 /// If it makes sense to render something in multiple ways, this should be the "main", most common sense way.
 pub trait Render: std::fmt::Debug {
@@ -348,6 +283,8 @@ pub enum Action {
     TogglePostFeedMode,
     /// Toggle mode for the main content
     ToggleMainContentMode,
+    /// Toggle mode for post summary
+    TogglePostSummaryMode,
 }
 
 impl Default for SnuiApp {
@@ -358,25 +295,26 @@ impl Default for SnuiApp {
         )
         .expect("Failed to create reddit client");
 
-        let feed = client.frontpage().hot();
-
-        let (s, r) = unbounded();
+        let mut feed = client.frontpage().hot();
+        feed.limit = 15;
 
         Self {
             client,
             state: State {
-                feed: PostFeedComponent::new(feed),
-                main_content: components::MainContentComponent::new(None),
+                feed_component: PostFeedComponent::new(),
+                main_component: MainContentComponent::new(),
+                summary_component: PostSummaryComponent::new(),
+                feed: Some(feed),
+                posts: vec![],
                 num_request_disable_binds: 0,
                 mark_for_refresh: true,
+                content_cache: LruCache::new(250),
                 options: Default::default(),
             },
             image_manager: Default::default(),
-            receiver: r,
-            sender: s,
+            fetcher: Fetcher::default(),
             windows: Windows::new(),
             user: None,
-            num_senders: 0,
         }
     }
 }

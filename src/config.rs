@@ -1,20 +1,38 @@
 use std::{collections::HashMap, fmt};
 
+use eframe::egui::CtxRef;
+use lru::LruCache;
 use serde::Serialize;
 use serde_derive::Deserialize;
+use snew::things::{Me, Post, PostFeed};
 
 use crate::{
-    components::{MainContentComponent, PostFeedComponent},
+    components::{
+        MainContentComponent, PostFeedComponent, PostId, PostSummaryComponent, ViewablePost,
+    },
+    fetch::Fetcher,
     input::{KeyBind, KeyBinds},
-    Action,
+    Action, Render,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     /// The post feed, a scrollable view of posts.
-    pub feed: PostFeedComponent,
+    pub feed_component: PostFeedComponent,
     /// The main, center view content.
-    pub main_content: MainContentComponent,
+    pub main_component: MainContentComponent,
+    /// The summary of the the current post. Also information about the user, if present.
+    pub summary_component: PostSummaryComponent,
+    /// Currently loaded feed.
+    #[serde(skip)]
+    pub feed: Option<PostFeed>,
+    /// Posts that are fetched and can be displayed
+    #[serde(skip)]
+    pub posts: Vec<ViewablePost>,
+    /// Cached content
+    #[serde(skip)]
+    #[serde(default = "empty_map")]
+    pub content_cache: LruCache<PostId, Option<Box<dyn Render>>>,
     /// Number of components claiming that keybinds should not be read.
     pub num_request_disable_binds: u32,
     /// Reset posts
@@ -25,6 +43,99 @@ pub struct State {
     pub options: Options,
 }
 
+fn current_buffer<'a, T>(
+    vec: &'a mut Vec<T>,
+    idx: usize,
+    amount: usize,
+    ratio: f32,
+) -> &'a mut [T] {
+    let right_side = (ratio * amount as f32).round() as usize;
+    let left_side = ((1f32 - ratio) * amount as f32).round() as usize;
+
+    let len = vec.len();
+
+    if len <= amount {
+        &mut vec[..]
+    } else if idx.checked_sub(left_side).is_none() {
+        &mut vec[0..idx + right_side]
+    } else if idx + right_side > len {
+        &mut vec[idx - left_side..len - 1]
+    } else {
+        &mut vec[idx - left_side..idx + right_side]
+    }
+}
+
+impl State {
+    pub fn buffer_posts(&mut self, fetcher: &mut Fetcher) {
+        let window = current_buffer(
+            &mut self.posts,
+            self.feed_component.viewed,
+            self.options.buffer_amount,
+            self.options.buffer_ratio,
+        );
+
+        for post in window {
+            if !self.content_cache.contains(&post.post_id) {
+                self.content_cache.put(post.post_id, None);
+                fetcher.get_content(post.inner.clone(), post.post_id)
+            }
+        }
+    }
+
+    pub fn set_feed(&mut self, mut feed: PostFeed) {
+        feed.limit = 15;
+        self.feed = Some(feed);
+    }
+
+    pub fn render_main_content(&mut self, ctx: &CtxRef) {
+        let post = self.posts.get(self.feed_component.viewed);
+
+        let content = Box::new(String::from("Loading..")) as Box<dyn Render>;
+        let mut content = &content;
+
+        if let Some(post) = post {
+            if let Some(maybe_cached) = self.content_cache.get(&post.post_id) {
+                if let Some(cached_content) = maybe_cached {
+                    content = cached_content;
+                }
+            }
+        }
+
+        self.main_component.render(ctx, &self.options, content);
+    }
+
+    pub fn extend_posts(&mut self, posts: Vec<Post>) {
+        let mut idx = self.posts.len();
+
+        for post in posts {
+            self.posts.push((post, idx).into());
+            idx += 1;
+        }
+    }
+
+    pub fn set_content(&mut self, post_id: &PostId, content: Box<dyn Render>) {
+        if let Some(empty_content) = self.content_cache.get_mut(post_id) {
+            assert!(empty_content.is_none());
+            *empty_content = Some(content);
+        }
+    }
+}
+
+impl State {
+    pub fn render_summary_component(&self, ctx: &CtxRef, me: Option<&Me>) {
+        self.summary_component.render(
+            ctx,
+            &self.options,
+            self.posts.get(self.feed_component.viewed),
+            me,
+        );
+    }
+}
+
+fn empty_map() -> LruCache<PostId, Option<Box<dyn Render>>> {
+    LruCache::new(250)
+}
+
 #[derive(Debug)]
 pub struct Options {
     /// Keybinds that can perform som [`Action`]
@@ -33,8 +144,11 @@ pub struct Options {
     pub immediate_posts: bool,
     /// Whether title bars are rendered. Probably want this on until Esc closes current window.
     pub show_title_bars: bool,
-    /// Number of posts to buffer on either side of current post. Setting this to 10 will at most buffer 20 posts. Max 50.
+    /// Number of posts to buffer. Max 50.
     pub buffer_amount: usize,
+    /// The ratio of the buffer above and below the currently viewed post.
+    /// If buffer_amount is 10, and this is 0.8, 8 posts will be buffered in front of current, and one behind.
+    pub buffer_ratio: f32,
 }
 
 impl From<FileConfig> for Options {
@@ -62,12 +176,14 @@ impl From<FileConfig> for Options {
             keybinds,
             immediate_posts: fc.immediate_posts.unwrap_or(false),
             show_title_bars: fc.show_title_bars.unwrap_or(true),
-            buffer_amount: fc.buffer_amount.unwrap_or(10).min(50),
+            buffer_amount: fc.buffer_amount.unwrap_or(25).min(50).max(1),
+            buffer_ratio: fc.buffer_ratio.unwrap_or(0.75).min(1f32).max(0f32),
         }
     }
 }
 
 impl Default for Options {
+    // todo dont crash
     fn default() -> Self {
         let config = std::fs::read_to_string("./config.toml")
             .expect("Error opening config file. Please create ./config.toml");
@@ -84,6 +200,7 @@ pub struct FileConfig {
     pub immediate_posts: Option<bool>,
     pub show_title_bars: Option<bool>,
     pub buffer_amount: Option<usize>,
+    pub buffer_ratio: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]

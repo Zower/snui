@@ -8,6 +8,7 @@ j = "PostDown"
 enter = "OpenPost" 
 p = { action = "TogglePostFeedMode", modifiers = ["shift"] }
 m = { action = "ToggleMainContentMode", modifiers = ["shift"] }
+t = { action = "TogglePostSummaryMode", modifiers = ["shift"] }
 r = "OpenSubredditWindow"
 l = "Login"
 f = "Frontpage"
