@@ -1,6 +1,7 @@
-refresh_token = "aaaa"
 immediate_posts = true
 show_title_bars = true
+buffer_amount = 35
+buffer_ratio = 0.9
 
 [binds]
 k = "PostUp"
