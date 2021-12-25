@@ -1,10 +1,13 @@
 refresh_token = "aaaa"
 immediate_posts = true
+show_title_bars = true
+
 [binds]
 k = "PostUp"
 j = "PostDown" 
 enter = "OpenPost" 
-p = { action = "ToggleCollapse", modifiers = ["shift"] }
+p = { action = "TogglePostFeedMode", modifiers = ["shift"] }
+m = { action = "ToggleMainContentMode", modifiers = ["shift"] }
 r = "OpenSubredditWindow"
 l = "Login"
 f = "Frontpage"

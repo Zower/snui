@@ -9,11 +9,11 @@ use snew::{
 };
 use std::{sync::Arc, thread, time::Duration};
 
-use crate::{PostId, ViewablePost};
+use crate::PostId;
 // todo: make this module a bit less.. manual
 
 pub enum Message {
-    PostsReady(Vec<ViewablePost>, PostFeed),
+    PostsReady(Vec<Post>, PostFeed),
     ContentReady(Content, PostId),
     ImageDecoded(Vec<egui::Color32>, (usize, usize), PostId),
     UserLoggedIn(UserAuthenticator),
@@ -21,12 +21,7 @@ pub enum Message {
 
 pub fn get_more_posts(mut feed: PostFeed, s: Sender<Message>) {
     thread::spawn(move || {
-        let posts: Vec<ViewablePost> = feed
-            .by_ref()
-            .filter_map(|p| p.ok())
-            .map(|p| p.into())
-            .take(35)
-            .collect();
+        let posts: Vec<Post> = feed.by_ref().filter_map(|p| p.ok()).take(15).collect();
 
         let _ = s.send(Message::PostsReady(posts, feed));
     });
@@ -58,7 +53,7 @@ pub fn decode_image(image: Bytes, post_id: PostId, s: Sender<Message>) {
     });
 }
 
-pub fn start_login_process(client_id: String, s: Sender<Message>) {
+pub fn start_login_process(client_id: &'static str, s: Sender<Message>) {
     thread::spawn(move || {
         let auth = Reddit::perform_code_flow(
             client_id,
@@ -68,7 +63,7 @@ pub fn start_login_process(client_id: String, s: Sender<Message>) {
 
         match auth {
             Ok(auth) => {
-                s.send(Message::UserLoggedIn(auth));
+                let _ = s.send(Message::UserLoggedIn(auth));
             }
 
             Err(err) => {

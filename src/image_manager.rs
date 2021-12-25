@@ -27,17 +27,10 @@ impl ImageManager {
         size: (usize, usize),
         allocator: &mut dyn eframe::epi::TextureAllocator,
     ) -> Option<Image> {
-        // let size = (image.width() as usize, image.height() as usize);
         let id = allocator.alloc_srgba_premultiplied(size, &image);
         let image = Image::new(id, size);
         self.images.insert(post_id, image);
 
         return Some(image);
-
-        None
-    }
-
-    pub fn get(&self, post_id: &usize) -> Option<&Image> {
-        self.images.get(post_id)
     }
 }

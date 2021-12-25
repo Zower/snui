@@ -1,35 +1,37 @@
 use std::{collections::HashMap, fmt};
 
+use serde::Serialize;
 use serde_derive::Deserialize;
-use snew::things::PostFeed;
 
 use crate::{
+    components::{MainContentComponent, PostFeedComponent},
     input::{KeyBind, KeyBinds},
-    Action, PostId, ViewablePost,
+    Action,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct State {
-    /// Currently loaded feed.
-    pub feed: Option<PostFeed>,
-    /// Posts that are fetched and can be displayed
-    pub posts: Vec<ViewablePost>,
-    /// Currently highlighted post in left pane
-    pub highlighted: PostId,
-    /// Currently viewed post in left pane
-    pub viewed: PostId,
+    /// The post feed, a scrollable view of posts.
+    pub feed: PostFeedComponent,
+    /// The main, center view content.
+    pub main_content: MainContentComponent,
+    /// Number of components claiming that keybinds should not be read.
+    pub num_request_disable_binds: u32,
     /// User options
+    #[serde(skip)]
     pub options: Options,
 }
 
 #[derive(Debug)]
 pub struct Options {
-    /// The refresh token for the users account.
-    pub refresh_token: Option<String>,
-    /// Whether the post is immediately rendered upon highlight, or if [`Action::OpenPost`] must be performed
-    pub immediate_posts: bool,
     /// Keybinds that can perform som [`Action`]
     pub keybinds: KeyBinds,
+    /// Whether the post is immediately rendered upon highlight, or if [`Action::OpenPost`] must be performed
+    pub immediate_posts: bool,
+    /// Whether title bars are rendered. Probably want this on until Esc closes current window.
+    pub show_title_bars: bool,
+    /// Number of posts to buffer on either side of current post. Setting this to 10 will at most buffer 20 posts. Max 50.
+    pub buffer_amount: usize,
 }
 
 impl From<FileConfig> for Options {
@@ -54,19 +56,31 @@ impl From<FileConfig> for Options {
         }
 
         Self {
-            refresh_token: fc.refresh_token,
-            immediate_posts: fc.immediate_posts.unwrap_or(false),
             keybinds,
+            immediate_posts: fc.immediate_posts.unwrap_or(false),
+            show_title_bars: fc.show_title_bars.unwrap_or(true),
+            buffer_amount: fc.buffer_amount.unwrap_or(10).min(50),
         }
+    }
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        let config = std::fs::read_to_string("./config.toml")
+            .expect("Error opening config file. Please create ./config.toml");
+
+        toml::from_str::<FileConfig>(&config)
+            .expect("Error parsing config file. Please check ./config.toml")
+            .into()
     }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct FileConfig {
-    pub refresh_token: Option<String>,
-    // default for bool is false
-    pub immediate_posts: Option<bool>,
     pub binds: HashMap<Key, ConfigKey>,
+    pub immediate_posts: Option<bool>,
+    pub show_title_bars: Option<bool>,
+    pub buffer_amount: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
