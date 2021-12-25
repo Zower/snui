@@ -104,7 +104,7 @@ impl epi::App for SnuiApp {
 
                 self.user = self.client.me().ok();
                 self.state.feed.set_feed(self.client.frontpage().hot());
-                self.get_more_posts();
+                self.state.mark_for_refresh = true;
             }
         }
     }
@@ -121,6 +121,14 @@ impl epi::App for SnuiApp {
     }
 
     fn update(&mut self, ctx: &egui::CtxRef, frame: &mut epi::Frame<'_>) {
+        if self.state.mark_for_refresh {
+            let (s, r) = unbounded();
+            self.sender = s;
+            self.receiver = r;
+
+            self.state.mark_for_refresh = false;
+            self.get_more_posts();
+        }
         let current_buffer = current_buffer(
             &mut self.state.feed.posts,
             self.state.feed.viewed,
@@ -230,9 +238,7 @@ impl SnuiApp {
             Action::ToggleMainContentMode => self.state.main_content.toggle_mode(),
             Action::OpenSubredditWindow => self.windows.open(WindowKind::Subreddit),
             Action::Frontpage => {
-                let (s, r) = unbounded();
-                self.receiver = r;
-                self.sender = s;
+                self.state.mark_for_refresh = true;
 
                 self.state.feed = PostFeedComponent::new(self.client.frontpage().hot());
             }
@@ -362,6 +368,7 @@ impl Default for SnuiApp {
                 feed: PostFeedComponent::new(feed),
                 main_content: components::MainContentComponent::new(None),
                 num_request_disable_binds: 0,
+                mark_for_refresh: true,
                 options: Default::default(),
             },
             image_manager: Default::default(),

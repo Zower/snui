@@ -17,6 +17,9 @@ pub struct State {
     pub main_content: MainContentComponent,
     /// Number of components claiming that keybinds should not be read.
     pub num_request_disable_binds: u32,
+    /// Reset posts
+    #[serde(skip)]
+    pub mark_for_refresh: bool,
     /// User options
     #[serde(skip)]
     pub options: Options,

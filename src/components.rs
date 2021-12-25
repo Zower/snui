@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use eframe::egui::{self, CentralPanel, CtxRef, Layout, Resize, Response, SidePanel, Window};
+use eframe::egui::{self, CentralPanel, CtxRef, Layout, Response, SidePanel, Window};
 use serde::{Deserialize, Serialize};
 use snew::{
     reddit::Reddit,
@@ -59,7 +59,10 @@ impl MainContentComponent {
                 Window::new("Main view")
                     .title_bar(options.show_title_bars)
                     .default_width(800f32)
-                    .default_height(800f32)
+                    .default_height(600f32)
+                    .min_width(400f32)
+                    .min_height(200f32)
+                    .resizable(true)
                     .show(&ctx, |ui| {
                         self.render_if_some(ui);
                     });
@@ -314,6 +317,7 @@ impl Handle for SubredditWindow {
     type Input = String;
     fn handle(input: &Self::Input, reddit: &Reddit, state: &mut State) {
         state.feed = PostFeedComponent::new(reddit.subreddit(&input).hot());
+        state.mark_for_refresh = true;
     }
 }
 
