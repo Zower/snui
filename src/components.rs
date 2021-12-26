@@ -1,18 +1,13 @@
 use std::sync::Arc;
 
-use eframe::egui::{
-    self, CentralPanel, CtxRef, Layout, Response, SidePanel, TopBottomPanel, Window,
-};
+use eframe::egui::{self, CentralPanel, CtxRef, Response, SidePanel, TopBottomPanel, Window};
 use serde::{Deserialize, Serialize};
 use snew::{
     reddit::Reddit,
     things::{Me, Post},
 };
 
-use crate::{
-    config::{Options, State},
-    Render,
-};
+use crate::{config::Options, state::State, Render};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ComponentMode {
@@ -76,11 +71,11 @@ pub struct ViewablePost {
     pub inner: Arc<Post>,
 }
 
-impl From<(Post, PostId)> for ViewablePost {
-    fn from(post: (Post, PostId)) -> Self {
+impl From<(PostId, Post)> for ViewablePost {
+    fn from(post: (PostId, Post)) -> Self {
         Self {
-            post_id: post.1,
-            inner: Arc::new(post.0),
+            post_id: post.0,
+            inner: Arc::new(post.1),
         }
     }
 }
@@ -100,8 +95,6 @@ pub struct PostFeedComponent {
 impl PostFeedComponent {
     pub fn new() -> Self {
         Self {
-            // feed: Some(feed),
-            // posts: vec![],
             highlighted: 0,
             viewed: 0,
             mode: ComponentMode::Snapped,
@@ -124,9 +117,9 @@ impl PostFeedComponent {
 }
 
 impl PostFeedComponent {
-    pub fn render(
+    pub fn render<'a>(
         &mut self,
-        posts: &Vec<ViewablePost>,
+        posts: impl Iterator<Item = &'a ViewablePost>,
         ctx: &CtxRef,
         options: &Options,
         auto_scroll: bool,
@@ -152,13 +145,18 @@ impl PostFeedComponent {
         }
     }
 
-    fn posts(&mut self, posts: &Vec<ViewablePost>, ui: &mut egui::Ui, auto_scroll: bool) {
+    fn posts<'a>(
+        &mut self,
+        posts: impl Iterator<Item = &'a ViewablePost>,
+        ui: &mut egui::Ui,
+        auto_scroll: bool,
+    ) {
         egui::ScrollArea::vertical()
             .id_source("post_scroller")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.vertical_centered_justified(|ui| {
-                    for (i, post) in posts.iter().enumerate() {
+                    for (i, post) in posts.enumerate() {
                         let is_highlighted = self.highlighted == i;
                         let response = Self::ui_post_summary(ui, &*post.inner, is_highlighted);
 
@@ -170,9 +168,7 @@ impl PostFeedComponent {
                             response.scroll_to_me(egui::Align::Center)
                         }
 
-                        if i != posts.len() {
-                            ui.separator();
-                        }
+                        ui.separator();
                     }
                 });
             });
@@ -291,134 +287,212 @@ impl PostSummaryComponent {
 }
 
 /// Floatable, potentially open, windows.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct Windows {
-    subreddit: SubredditWindow,
+    windows: Vec<Box<dyn Show>>,
 }
 
 impl Windows {
     pub fn new() -> Self {
         Self {
-            subreddit: SubredditWindow {
-                request_focus: true,
-                window: WindowState::new(None),
-            },
+            windows: vec![
+                Box::new(SubredditWindow::new()),
+                Box::new(FilterWindow::new()),
+            ],
         }
     }
 
     pub fn open(&mut self, kind: WindowKind) {
-        match kind {
-            WindowKind::Subreddit => {
-                self.subreddit.window.open = true;
-            }
-        }
+        let window = self
+            .windows
+            .iter_mut()
+            .find(|window| window.kind() == kind)
+            .expect("Uninitialized window");
+
+        window.toggle_open();
     }
 
     /// Called every frame
     pub fn update(&mut self, ctx: &CtxRef, reddit: &Reddit, state: &mut State) {
-        self.show_subreddit(ctx, reddit, state);
-    }
-
-    fn show_subreddit(&mut self, ctx: &CtxRef, reddit: &Reddit, state: &mut State) {
-        let sub = self.subreddit.show(ctx, state);
-
-        if let Some(sub) = sub {
-            SubredditWindow::handle(&sub, reddit, state)
+        for window in self.windows.iter_mut() {
+            window.show(ctx, reddit, state)
         }
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub enum WindowKind {
     Subreddit,
+    Filter,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct WindowState<T> {
+struct WindowState {
     open: bool,
-    inner: T,
+    request_focus: bool,
 }
 
-impl<T> WindowState<T> {
-    fn new(t: T) -> Self {
+impl WindowState {
+    fn new() -> Self {
         Self {
             open: false,
-            inner: t,
+            request_focus: true,
         }
     }
 }
 
-pub trait Handle {
-    type Input;
-    fn handle(input: &Self::Input, reddit: &Reddit, state: &mut State);
+pub trait Show: std::fmt::Debug {
+    fn show(&mut self, ctx: &egui::CtxRef, reddit: &Reddit, state: &mut State);
+    fn kind(&self) -> WindowKind;
+    fn toggle_open(&mut self);
 }
 
-impl Handle for SubredditWindow {
-    type Input = String;
-    fn handle(input: &Self::Input, reddit: &Reddit, state: &mut State) {
-        state.feed = Some(reddit.subreddit(input).hot());
-        state.posts.clear();
-        state.content_cache.clear();
-        state.feed_component.reset();
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FilterWindow {
+    window: WindowState,
+    checked: bool,
+}
 
-        state.mark_for_refresh = true;
+impl FilterWindow {
+    fn new() -> Self {
+        Self {
+            window: WindowState::new(),
+            checked: false,
+        }
     }
 }
 
-pub trait Show {
-    type Output;
-    fn show(&mut self, ctx: &egui::CtxRef, state: &mut State) -> Self::Output;
-}
-
-impl Show for SubredditWindow {
-    type Output = Option<String>;
-
-    fn show(&mut self, ctx: &egui::CtxRef, state: &mut State) -> Self::Output {
+impl Show for FilterWindow {
+    fn show(&mut self, ctx: &egui::CtxRef, reddit: &Reddit, state: &mut State) {
         let mut should_close = false;
 
         if !self.window.open {
-            self.request_focus = true;
-            self.window.inner = None;
+            self.window.request_focus = true;
         }
 
-        egui::Window::new("Choose subreddit")
+        egui::Window::new("Filters")
             .open(&mut self.window.open)
             .title_bar(state.options.show_title_bars)
             .show(ctx, |ui| {
-                let mut text = self.window.inner.take().unwrap_or(String::new());
-                let response = ui.add(egui::TextEdit::singleline(&mut text));
+                ui.add_space(10f32);
+                let response = ui
+                    .horizontal(|ui| {
+                        ui.label("Posts: ");
+                        ui.checkbox(&mut self.checked, "Only renderable")
+                    })
+                    .response;
 
-                if self.request_focus {
+                ui.add_space(10f32);
+
+                if self.window.request_focus {
                     response.request_focus();
-                    self.request_focus = false;
+                    self.window.request_focus = false;
                 }
 
                 if response.gained_focus() {
                     state.num_request_disable_binds += 1
                 }
 
-                self.window.inner = Some(text);
-
                 if response.lost_focus() {
                     state.num_request_disable_binds -= 1;
 
                     if ui.input().key_pressed(egui::Key::Enter) {
+                        println!("Enter!");
                         should_close = true;
                     }
                 }
             });
 
-        return if should_close {
-            self.window.open = false;
-            self.request_focus = true;
-            self.window.inner.take()
+        if self.checked {
+            state.active_filters.insert(0, |p| {
+                p.inner.selftext.is_some()
+                    || p.inner.url.ends_with(".jpg")
+                    || p.inner.url.ends_with(".png")
+                    || p.inner.url.ends_with(".jpeg")
+            });
         } else {
-            None
-        };
+            state.active_filters.remove(&0);
+        }
+
+        if should_close {
+            self.window.open = false;
+        }
+    }
+
+    fn kind(&self) -> WindowKind {
+        WindowKind::Filter
+    }
+
+    fn toggle_open(&mut self) {
+        self.window.open = !self.window.open
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SubredditWindow {
-    request_focus: bool,
-    window: WindowState<Option<String>>,
+    window: WindowState,
+    text: Option<String>,
+}
+
+impl SubredditWindow {
+    fn new() -> Self {
+        Self {
+            window: WindowState::new(),
+            text: None,
+        }
+    }
+}
+
+impl Show for SubredditWindow {
+    fn show(&mut self, ctx: &egui::CtxRef, reddit: &Reddit, state: &mut State) {
+        let mut should_close = false;
+
+        if !self.window.open {
+            self.window.request_focus = true;
+            self.text = None;
+        }
+
+        egui::Window::new("Choose subreddit")
+            .open(&mut self.window.open)
+            .title_bar(state.options.show_title_bars)
+            .show(ctx, |ui| {
+                let mut text = self.text.take().unwrap_or(String::new());
+                let response = ui.add(egui::TextEdit::singleline(&mut text));
+
+                if self.window.request_focus {
+                    response.request_focus();
+                    self.window.request_focus = false;
+                }
+
+                if response.gained_focus() {
+                    state.num_request_disable_binds += 1
+                }
+
+                self.text = if response.lost_focus() {
+                    state.num_request_disable_binds -= 1;
+
+                    if ui.input().key_pressed(egui::Key::Enter) {
+                        state.reset_feed(reddit.subreddit(&text).hot());
+                        should_close = true;
+                        None
+                    } else {
+                        Some(text)
+                    }
+                } else {
+                    Some(text)
+                }
+            });
+
+        if should_close {
+            self.window.open = false;
+        }
+    }
+
+    fn kind(&self) -> WindowKind {
+        WindowKind::Subreddit
+    }
+
+    fn toggle_open(&mut self) {
+        self.window.open = !self.window.open
+    }
 }

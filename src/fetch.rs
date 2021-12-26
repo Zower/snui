@@ -9,7 +9,7 @@ use snew::{
 };
 use std::{sync::Arc, thread, time::Duration};
 
-use crate::{components::PostId, config::State, SnuiApp};
+use crate::{components::PostId, state::State, SnuiApp};
 // todo: make this module a bit less.. manual
 
 pub enum Message {
@@ -29,7 +29,7 @@ pub struct MorePosts;
 impl Fetch for MorePosts {
     fn fetch(
         _reddit: snew::reddit::Reddit,
-        state: &mut crate::config::State,
+        state: &mut State,
         sender: crossbeam_channel::Sender<super::Message>,
     ) {
         if let Some(mut feed) = state.feed.take() {

@@ -11,5 +11,6 @@ p = { action = "TogglePostFeedMode", modifiers = ["shift"] }
 m = { action = "ToggleMainContentMode", modifiers = ["shift"] }
 t = { action = "TogglePostSummaryMode", modifiers = ["shift"] }
 r = "OpenSubredditWindow"
+v = "OpenFilterWindow"
 l = "Login"
 f = "Frontpage"

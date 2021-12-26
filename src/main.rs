@@ -4,16 +4,14 @@ mod fetch;
 mod image_manager;
 mod impl_render;
 mod input;
+mod state;
 
-use components::{
-    MainContentComponent, PostFeedComponent, PostSummaryComponent, WindowKind, Windows,
-};
-use config::State;
+use components::{WindowKind, Windows};
 use fetch::{Fetcher, Message, MorePosts};
 use image_manager::ImageManager;
 use input::KeyPress;
+use state::State;
 
-use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use snew::{
     auth::{ApplicationAuthenticator, UserAuthenticator},
@@ -39,6 +37,7 @@ pub struct SnuiApp {
     // /// Current layout of the application
     // layout: SnuiLayout,
     /// Windows that can pop up.
+    #[serde(skip)]
     windows: Windows,
     /// Logged in user, if any.
     #[serde(skip)]
@@ -101,10 +100,12 @@ impl epi::App for SnuiApp {
     fn update(&mut self, ctx: &egui::CtxRef, frame: &mut epi::Frame<'_>) {
         if self.state.mark_for_refresh {
             self.fetcher.reset();
+            self.get_more_posts();
 
             self.state.mark_for_refresh = false;
-            self.get_more_posts();
         }
+
+        self.conditional_get_more_posts();
 
         self.state.buffer_posts(&mut self.fetcher);
 
@@ -141,9 +142,7 @@ impl epi::App for SnuiApp {
         self.state
             .render_summary_component(&ctx, self.user.as_ref());
 
-        self.state
-            .feed_component
-            .render(&self.state.posts, ctx, &self.state.options, has_moved);
+        self.state.render_feed_component(&ctx, has_moved);
 
         self.state.render_main_content(&ctx);
 
@@ -158,7 +157,12 @@ impl SnuiApp {
 
     fn conditional_get_more_posts(&mut self) {
         if self.state.feed_component.highlighted
-            >= self.state.posts.len().checked_sub(10).unwrap_or(0)
+            >= self
+                .state
+                .get_working_posts()
+                .count()
+                .checked_sub(10)
+                .unwrap_or(0)
         {
             self.get_more_posts()
         }
@@ -168,15 +172,14 @@ impl SnuiApp {
         let mut has_moved = false;
         match action {
             Action::PostDown => {
+                // maybe bug
                 self.state.feed_component.highlighted = self
                     .state
                     .feed_component
                     .highlighted
                     .checked_add(1)
                     .unwrap_or(usize::MAX)
-                    .min(self.state.posts.len() - 1);
-
-                self.conditional_get_more_posts();
+                    .min(self.state.unfiltered_len());
 
                 has_moved = true;
             }
@@ -202,13 +205,9 @@ impl SnuiApp {
             Action::ToggleMainContentMode => self.state.main_component.toggle_mode(),
             Action::TogglePostSummaryMode => self.state.summary_component.toggle_mode(),
             Action::OpenSubredditWindow => self.windows.open(WindowKind::Subreddit),
+            Action::OpenFilterWindow => self.windows.open(WindowKind::Filter),
             Action::Frontpage => {
-                self.state.mark_for_refresh = true;
-
-                self.state.set_feed(self.client.frontpage().hot());
-                self.state.posts.clear();
-                self.state.content_cache.clear();
-                self.state.feed_component.reset();
+                self.state.reset_feed(self.client.frontpage().hot());
             }
         };
 
@@ -277,6 +276,8 @@ pub enum Action {
     Frontpage,
     /// Open subreddit window
     OpenSubredditWindow,
+    /// Open filter window
+    OpenFilterWindow,
     /// Start login process
     Login,
     /// Toggle mode for the post feed
@@ -300,17 +301,7 @@ impl Default for SnuiApp {
 
         Self {
             client,
-            state: State {
-                feed_component: PostFeedComponent::new(),
-                main_component: MainContentComponent::new(),
-                summary_component: PostSummaryComponent::new(),
-                feed: Some(feed),
-                posts: vec![],
-                num_request_disable_binds: 0,
-                mark_for_refresh: true,
-                content_cache: LruCache::new(250),
-                options: Default::default(),
-            },
+            state: State::new(feed),
             image_manager: Default::default(),
             fetcher: Fetcher::default(),
             windows: Windows::new(),
